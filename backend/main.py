@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 from chapter_parser import ChapterParseError, ChapterParser
-from llm import LLMConfigError, LLMResponseError, create_llm_client_from_env
+from llm import LLMConfigError, LLMResponseError, create_chat_model_from_env
 from story_elements import StoryElementExtractor
 
 
@@ -87,8 +87,8 @@ def create_novel_chapters(request: NovelChapterRequest) -> NovelChaptersResponse
 @app.post("/api/novels/story-elements")
 def create_story_elements(request: StoryElementsRequest) -> StoryElementsResponse:
     try:
-        client = create_llm_client_from_env()
-        result = StoryElementExtractor(client).extract(
+        model = create_chat_model_from_env()
+        result = StoryElementExtractor(model).extract(
             title=request.title,
             chapters=[chapter.model_dump() for chapter in request.chapters],
         )
