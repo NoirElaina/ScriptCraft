@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { parse as parseYaml } from 'yaml'
 import {
   AlertTriangle,
   BookOpen,
@@ -15,6 +16,7 @@ import {
 } from '@lucide/vue'
 
 import { parseChapters, type Chapter } from '@/api/chapters'
+import { generateScriptYaml } from '@/api/script-yaml'
 import { extractStoryElements, type StoryElementsResponse } from '@/api/story-elements'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,10 +33,55 @@ const novelText = ref('')
 const chapters = ref<Chapter[]>([])
 const selectedChapterId = ref<string>()
 const storyElements = ref<StoryElementsResponse>()
+const scriptYaml = ref('')
 const isParsing = ref(false)
 const isExtracting = ref(false)
+const isGeneratingYaml = ref(false)
 const errorMessage = ref('')
 const storyErrorMessage = ref('')
+const yamlErrorMessage = ref('')
+
+type YamlRecord = Record<string, unknown>
+
+interface ScriptCharacter {
+  id: string
+  name: string
+  aliases: string[]
+  role: string
+  description: string
+  motivation: string
+}
+
+interface ScriptLocation {
+  id: string
+  name: string
+  description: string
+}
+
+interface ScriptEvent {
+  id: string
+  source_chapter: string
+  summary: string
+}
+
+interface ScriptBeat {
+  type: string
+  speaker_id?: string
+  content: string
+}
+
+interface ScriptScene {
+  id: string
+  title: string
+  source_chapters: string[]
+  source_events: string[]
+  location_id: string
+  time_of_day: string
+  characters: string[]
+  dramatic_purpose: string
+  summary: string
+  beats: ScriptBeat[]
+}
 
 const selectedChapter = computed(() => {
   return (
@@ -47,32 +94,101 @@ const chapterCoverageLabel = computed(() => {
   return chapters.value.length >= 3 ? '符合 3 章要求' : '章节不足'
 })
 
-const yamlPreview = computed(() => {
-  const characterLines = storyElements.value?.characters.length
-    ? storyElements.value.characters.map(
-        (character) => `  - id: ${character.id}\n    name: ${character.name}`,
-      )
-    : ['  []']
-  const eventLines = storyElements.value?.events.length
-    ? storyElements.value.events.map(
-        (event) => `  - id: ${event.id}\n    summary: ${event.summary}`,
-      )
-    : ['  []']
+const scriptDocument = computed(() => {
+  if (!scriptYaml.value) return undefined
 
-  return [
-    `title: ${title.value}`,
-    `chapters: ${chapters.value.length}`,
-    'characters:',
-    ...characterLines,
-    'events:',
-    ...eventLines,
-    'scenes: []',
-  ].join('\n')
+  try {
+    const value = parseYaml(scriptYaml.value) as unknown
+    return isRecord(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+})
+
+const scriptMetadata = computed(() => {
+  const metadata = scriptDocument.value?.metadata
+  return isRecord(metadata) ? metadata : {}
+})
+
+const scriptCharacters = computed<ScriptCharacter[]>(() => {
+  return asArray(scriptDocument.value?.characters).map((item, index) => {
+    const record = isRecord(item) ? item : {}
+    return {
+      id: asString(record.id, `char_${String(index + 1).padStart(3, '0')}`),
+      name: asString(record.name, '未命名角色'),
+      aliases: asStringArray(record.aliases),
+      role: asString(record.role, ''),
+      description: asString(record.description, ''),
+      motivation: asString(record.motivation, ''),
+    }
+  })
+})
+
+const scriptLocations = computed<ScriptLocation[]>(() => {
+  return asArray(scriptDocument.value?.locations).map((item, index) => {
+    const record = isRecord(item) ? item : {}
+    return {
+      id: asString(record.id, `loc_${String(index + 1).padStart(3, '0')}`),
+      name: asString(record.name, '未命名地点'),
+      description: asString(record.description, ''),
+    }
+  })
+})
+
+const scriptEvents = computed<ScriptEvent[]>(() => {
+  return asArray(scriptDocument.value?.events).map((item, index) => {
+    const record = isRecord(item) ? item : {}
+    return {
+      id: asString(record.id, `event_${String(index + 1).padStart(3, '0')}`),
+      source_chapter: asString(record.source_chapter, ''),
+      summary: asString(record.summary, ''),
+    }
+  })
+})
+
+const scriptScenes = computed<ScriptScene[]>(() => {
+  return asArray(scriptDocument.value?.scenes).map((item, index) => {
+    const record = isRecord(item) ? item : {}
+    return {
+      id: asString(record.id, `scene_${String(index + 1).padStart(3, '0')}`),
+      title: asString(record.title, `场次 ${index + 1}`),
+      source_chapters: asStringArray(record.source_chapters),
+      source_events: asStringArray(record.source_events),
+      location_id: asString(record.location_id, ''),
+      time_of_day: asString(record.time_of_day, ''),
+      characters: asStringArray(record.characters),
+      dramatic_purpose: asString(record.dramatic_purpose, ''),
+      summary: asString(record.summary, ''),
+      beats: asArray(record.beats).map((beat) => {
+        const beatRecord = isRecord(beat) ? beat : {}
+        return {
+          type: asString(beatRecord.type, 'action'),
+          speaker_id: asString(beatRecord.speaker_id, ''),
+          content: asString(beatRecord.content, ''),
+        }
+      }),
+    }
+  })
+})
+
+const scriptParseError = computed(() => scriptYaml.value && !scriptDocument.value)
+
+const characterNameById = computed(() => {
+  return new Map(scriptCharacters.value.map((character) => [character.id, character.name]))
+})
+
+const locationNameById = computed(() => {
+  return new Map(scriptLocations.value.map((location) => [location.id, location.name]))
+})
+
+const eventSummaryById = computed(() => {
+  return new Map(scriptEvents.value.map((event) => [event.id, event.summary]))
 })
 
 async function handleParse() {
   errorMessage.value = ''
   storyErrorMessage.value = ''
+  yamlErrorMessage.value = ''
   isParsing.value = true
 
   try {
@@ -80,10 +196,12 @@ async function handleParse() {
     title.value = result.title
     chapters.value = result.chapters
     storyElements.value = undefined
+    scriptYaml.value = ''
     selectedChapterId.value = result.chapters[0]?.id
   } catch (error) {
     chapters.value = []
     storyElements.value = undefined
+    scriptYaml.value = ''
     selectedChapterId.value = undefined
     errorMessage.value = error instanceof Error ? error.message : '章节解析失败'
   } finally {
@@ -93,15 +211,35 @@ async function handleParse() {
 
 async function handleExtractStoryElements() {
   storyErrorMessage.value = ''
+  yamlErrorMessage.value = ''
   isExtracting.value = true
 
   try {
     storyElements.value = await extractStoryElements(title.value, chapters.value)
+    scriptYaml.value = ''
   } catch (error) {
     storyElements.value = undefined
+    scriptYaml.value = ''
     storyErrorMessage.value = error instanceof Error ? error.message : '故事元素抽取失败'
   } finally {
     isExtracting.value = false
+  }
+}
+
+async function handleGenerateScriptYaml() {
+  if (!storyElements.value) return
+
+  yamlErrorMessage.value = ''
+  isGeneratingYaml.value = true
+
+  try {
+    const result = await generateScriptYaml(title.value, chapters.value, storyElements.value)
+    scriptYaml.value = result.yaml
+  } catch (error) {
+    scriptYaml.value = ''
+    yamlErrorMessage.value = error instanceof Error ? error.message : '剧本 YAML 生成失败'
+  } finally {
+    isGeneratingYaml.value = false
   }
 }
 
@@ -109,9 +247,69 @@ function clearWorkspace() {
   novelText.value = ''
   chapters.value = []
   storyElements.value = undefined
+  scriptYaml.value = ''
   selectedChapterId.value = undefined
   errorMessage.value = ''
   storyErrorMessage.value = ''
+  yamlErrorMessage.value = ''
+}
+
+function metadataValue(key: string): string {
+  return asString(scriptMetadata.value[key], '-')
+}
+
+function characterName(id: string): string {
+  return characterNameById.value.get(id) ?? id
+}
+
+function locationName(id: string): string {
+  return locationNameById.value.get(id) ?? id
+}
+
+function eventSummary(id: string): string {
+  return eventSummaryById.value.get(id) ?? id
+}
+
+function beatTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    action: '动作',
+    dialogue: '对白',
+    narration: '旁白',
+    transition: '转场',
+    sound: '声音',
+  }
+  return labels[type] ?? type
+}
+
+function beatTypeClass(type: string): string {
+  const classes: Record<string, string> = {
+    action: 'border-sky-200 bg-sky-50 text-sky-700',
+    dialogue: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    narration: 'border-violet-200 bg-violet-50 text-violet-700',
+    transition: 'border-amber-200 bg-amber-50 text-amber-700',
+    sound: 'border-rose-200 bg-rose-50 text-rose-700',
+  }
+  return classes[type] ?? 'border-muted bg-muted text-muted-foreground'
+}
+
+function isRecord(value: unknown): value is YamlRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function asStringArray(value: unknown): string[] {
+  return asArray(value)
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+}
+
+function asString(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback
+  const text = String(value).trim()
+  return text || fallback
 }
 </script>
 
@@ -302,12 +500,44 @@ function clearWorkspace() {
                       </div>
                     </div>
 
+                    <div class="rounded-lg border bg-background p-4">
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <div class="flex items-center gap-2 text-sm font-medium">
+                            <CheckCircle2 v-if="scriptYaml" class="size-4 text-emerald-600" />
+                            <span v-else class="size-4 rounded-full border" />
+                            AI 剧本 YAML 生成
+                          </div>
+                          <p class="mt-2 text-sm text-muted-foreground">
+                            基于章节、角色、地点和事件生成可编辑的剧本 YAML 初稿。
+                          </p>
+                        </div>
+                        <Button
+                          :disabled="isGeneratingYaml || !storyElements"
+                          class="shrink-0"
+                          @click="handleGenerateScriptYaml"
+                        >
+                          <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
+                          <Sparkles v-else class="size-4" />
+                          生成
+                        </Button>
+                      </div>
+                    </div>
+
                     <div
                       v-if="storyErrorMessage"
                       class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
                     >
                       <AlertTriangle class="mt-0.5 size-4 shrink-0" />
                       <span>{{ storyErrorMessage }}</span>
+                    </div>
+
+                    <div
+                      v-if="yamlErrorMessage"
+                      class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                    >
+                      <AlertTriangle class="mt-0.5 size-4 shrink-0" />
+                      <span>{{ yamlErrorMessage }}</span>
                     </div>
 
                     <div v-if="storyElements" class="space-y-3">
@@ -390,11 +620,224 @@ function clearWorkspace() {
               </TabsContent>
               <TabsContent value="yaml" class="mt-4 min-h-0 flex-1">
                 <div class="flex h-full min-h-0 flex-col rounded-lg border bg-background p-4">
-                  <p class="text-sm font-medium">YAML 剧本预览</p>
-                  <pre
-                    class="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-xs leading-6 text-muted-foreground"
-                    >{{ yamlPreview }}</pre
+                  <div class="shrink-0 flex items-center justify-between gap-3">
+                    <p class="text-sm font-medium">AI 剧本 YAML</p>
+                    <Button
+                      size="sm"
+                      :disabled="isGeneratingYaml || !storyElements"
+                      @click="handleGenerateScriptYaml"
+                    >
+                      <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
+                      <Sparkles v-else class="size-4" />
+                      生成
+                    </Button>
+                  </div>
+
+                  <div
+                    v-if="yamlErrorMessage"
+                    class="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
                   >
+                    <AlertTriangle class="mt-0.5 size-4 shrink-0" />
+                    <span>{{ yamlErrorMessage }}</span>
+                  </div>
+
+                  <Tabs
+                    v-if="scriptYaml"
+                    default-value="preview"
+                    class="mt-4 flex min-h-0 flex-1 flex-col"
+                  >
+                    <TabsList class="grid w-full shrink-0 grid-cols-2">
+                      <TabsTrigger value="preview">预览</TabsTrigger>
+                      <TabsTrigger value="source">源码</TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="preview" class="mt-4 min-h-0 flex-1 overflow-hidden">
+                      <div
+                        v-if="scriptParseError"
+                        class="flex h-full items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+                      >
+                        YAML 解析失败，请查看源码。
+                      </div>
+
+                      <ScrollArea v-else class="h-full pr-3">
+                        <div class="space-y-4">
+                          <div class="grid grid-cols-3 gap-2 text-center">
+                            <div class="rounded-lg border bg-muted/30 p-3">
+                              <p class="text-lg font-semibold">{{ scriptCharacters.length }}</p>
+                              <p class="text-xs text-muted-foreground">角色</p>
+                            </div>
+                            <div class="rounded-lg border bg-muted/30 p-3">
+                              <p class="text-lg font-semibold">{{ scriptLocations.length }}</p>
+                              <p class="text-xs text-muted-foreground">地点</p>
+                            </div>
+                            <div class="rounded-lg border bg-muted/30 p-3">
+                              <p class="text-lg font-semibold">{{ scriptScenes.length }}</p>
+                              <p class="text-xs text-muted-foreground">场次</p>
+                            </div>
+                          </div>
+
+                          <div class="rounded-lg border bg-muted/20 p-3">
+                            <div class="flex flex-wrap gap-2">
+                              <Badge variant="secondary">{{
+                                metadataValue('adaptation_style')
+                              }}</Badge>
+                              <Badge variant="outline">{{ metadataValue('language') }}</Badge>
+                              <Badge variant="outline"
+                                >{{ metadataValue('chapters_count') }} 章</Badge
+                              >
+                            </div>
+                            <p class="mt-3 text-xs leading-6 text-muted-foreground">
+                              来源：{{ metadataValue('source_title') }}
+                            </p>
+                          </div>
+
+                          <div class="space-y-2">
+                            <div class="flex items-center gap-2 text-sm font-medium">
+                              <Users class="size-4" />
+                              角色表
+                            </div>
+                            <div class="space-y-2">
+                              <div
+                                v-for="character in scriptCharacters"
+                                :key="character.id"
+                                class="rounded-lg border bg-muted/20 p-3"
+                              >
+                                <div class="flex items-center justify-between gap-2">
+                                  <p class="text-sm font-medium">{{ character.name }}</p>
+                                  <Badge variant="outline">{{ character.role || character.id }}</Badge>
+                                </div>
+                                <p class="mt-2 text-xs leading-5 text-muted-foreground">
+                                  {{ character.description || '暂无角色描述' }}
+                                </p>
+                                <p
+                                  v-if="character.motivation"
+                                  class="mt-1 text-xs leading-5 text-muted-foreground"
+                                >
+                                  动机：{{ character.motivation }}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="space-y-2">
+                            <div class="flex items-center gap-2 text-sm font-medium">
+                              <MapPin class="size-4" />
+                              地点表
+                            </div>
+                            <div class="space-y-2">
+                              <div
+                                v-for="location in scriptLocations"
+                                :key="location.id"
+                                class="rounded-lg border bg-muted/20 p-3"
+                              >
+                                <p class="text-sm font-medium">{{ location.name }}</p>
+                                <p class="mt-1 text-xs leading-5 text-muted-foreground">
+                                  {{ location.description || '暂无地点描述' }}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="space-y-3">
+                            <div class="flex items-center gap-2 text-sm font-medium">
+                              <BookOpen class="size-4" />
+                              场次
+                            </div>
+
+                            <div
+                              v-for="scene in scriptScenes"
+                              :key="scene.id"
+                              class="rounded-lg border bg-background p-3"
+                            >
+                              <div class="space-y-2">
+                                <div class="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p class="text-sm font-medium">{{ scene.title }}</p>
+                                    <p class="mt-1 text-xs text-muted-foreground">
+                                      {{ scene.id }} · {{ locationName(scene.location_id) }}
+                                    </p>
+                                  </div>
+                                  <Badge variant="secondary">{{ scene.time_of_day || '时间未定' }}</Badge>
+                                </div>
+
+                                <p class="text-xs leading-5 text-muted-foreground">
+                                  {{ scene.summary }}
+                                </p>
+
+                                <div class="flex flex-wrap gap-1.5">
+                                  <Badge
+                                    v-for="characterId in scene.characters"
+                                    :key="`${scene.id}-${characterId}`"
+                                    variant="outline"
+                                  >
+                                    {{ characterName(characterId) }}
+                                  </Badge>
+                                </div>
+
+                                <div
+                                  v-if="scene.dramatic_purpose"
+                                  class="rounded-md bg-muted/40 p-2 text-xs leading-5 text-muted-foreground"
+                                >
+                                  叙事作用：{{ scene.dramatic_purpose }}
+                                </div>
+
+                                <div v-if="scene.source_events.length" class="space-y-1">
+                                  <p class="text-xs font-medium text-muted-foreground">来源事件</p>
+                                  <p
+                                    v-for="eventId in scene.source_events"
+                                    :key="`${scene.id}-${eventId}`"
+                                    class="text-xs leading-5 text-muted-foreground"
+                                  >
+                                    {{ eventSummary(eventId) }}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div class="mt-3 space-y-2">
+                                <div
+                                  v-for="(beat, beatIndex) in scene.beats"
+                                  :key="`${scene.id}-beat-${beatIndex}`"
+                                  class="rounded-md border p-2"
+                                >
+                                  <div class="mb-1 flex items-center gap-2">
+                                    <span
+                                      class="rounded border px-1.5 py-0.5 text-[11px]"
+                                      :class="beatTypeClass(beat.type)"
+                                    >
+                                      {{ beatTypeLabel(beat.type) }}
+                                    </span>
+                                    <span
+                                      v-if="beat.speaker_id"
+                                      class="text-xs font-medium text-muted-foreground"
+                                    >
+                                      {{ characterName(beat.speaker_id) }}
+                                    </span>
+                                  </div>
+                                  <p class="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                                    {{ beat.content }}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value="source" class="mt-4 min-h-0 flex-1 overflow-hidden">
+                      <pre
+                        class="h-full overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/20 p-3 text-xs leading-6 text-muted-foreground"
+                        >{{ scriptYaml }}</pre
+                      >
+                    </TabsContent>
+                  </Tabs>
+
+                  <div
+                    v-else
+                    class="mt-4 flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+                  >
+                    先完成故事元素抽取，再生成剧本 YAML。
+                  </div>
                 </div>
               </TabsContent>
             </Tabs>

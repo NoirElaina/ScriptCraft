@@ -4,6 +4,7 @@ import uvicorn
 
 from chapter_parser import ChapterParseError, ChapterParser
 from llm import LLMConfigError, LLMResponseError, create_chat_model_from_env
+from script_yaml import ScriptYamlGenerator
 from story_elements import StoryElementExtractor
 
 
@@ -63,6 +64,18 @@ class StoryElementsResponse(BaseModel):
     events: list[EventResponse]
 
 
+class ScriptYamlRequest(BaseModel):
+    title: str = Field(default="未命名小说", max_length=120, description="小说作品名")
+    chapters: list[ChapterResponse] = Field(min_length=3, description="章节解析结果")
+    characters: list[CharacterResponse] = Field(default_factory=list, description="AI 抽取的角色")
+    locations: list[LocationResponse] = Field(default_factory=list, description="AI 抽取的地点")
+    events: list[EventResponse] = Field(default_factory=list, description="AI 抽取的事件")
+
+
+class ScriptYamlResponse(BaseModel):
+    yaml: str
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "scriptcraft-backend"}
@@ -98,6 +111,25 @@ def create_story_elements(request: StoryElementsRequest) -> StoryElementsRespons
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return StoryElementsResponse(**result)
+
+
+@app.post("/api/novels/script-yaml")
+def create_script_yaml(request: ScriptYamlRequest) -> ScriptYamlResponse:
+    try:
+        model = create_chat_model_from_env()
+        script_yaml = ScriptYamlGenerator(model).generate(
+            title=request.title,
+            chapters=[chapter.model_dump() for chapter in request.chapters],
+            characters=[character.model_dump() for character in request.characters],
+            locations=[location.model_dump() for location in request.locations],
+            events=[event.model_dump() for event in request.events],
+        )
+    except LLMConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return ScriptYamlResponse(yaml=script_yaml)
 
 
 def main() -> None:

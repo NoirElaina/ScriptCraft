@@ -61,6 +61,7 @@ dependencies = [
     { name = "langchain-anthropic" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 
@@ -70,6 +71,7 @@ requires-dist = [
     { name = "langchain-anthropic", specifier = ">=1.4.4" },
     { name = "langchain-openai", specifier = ">=1.2.2" },
     { name = "langgraph", specifier = ">=1.2.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.49.0" },
 ]
 
