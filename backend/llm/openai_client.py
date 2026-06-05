@@ -61,7 +61,7 @@ class OpenAICompatibleClient:
                 raw_body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
-            raise LLMResponseError(f"AI 服务返回错误：{exc.code} {detail}") from exc
+            raise LLMResponseError(f"AI 服务返回错误：{exc.code} {request.full_url} {detail}") from exc
         except urllib.error.URLError as exc:
             raise LLMResponseError(f"AI 服务请求失败：{exc.reason}") from exc
 
