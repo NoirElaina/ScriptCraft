@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any, TypedDict
 
@@ -65,12 +66,15 @@ def normalize_node(state: StoryElementState) -> StoryElementState:
 def build_story_element_messages(title: str, chapters: Sequence[Mapping[str, Any]]) -> list[BaseMessage]:
     chapter_blocks = []
     for chapter in chapters:
+        analysis = chapter.get("analysis")
+        content_label = "章节分析 JSON" if isinstance(analysis, Mapping) else "章节正文"
+        content = json.dumps(analysis, ensure_ascii=False) if isinstance(analysis, Mapping) else chapter.get("content", "")
         chapter_blocks.append(
             "\n".join(
                 [
                     f"章节ID：{chapter.get('id', '')}",
                     f"章节标题：{chapter.get('heading', '')} {chapter.get('title', '')}".strip(),
-                    f"章节正文：{chapter.get('content', '')}",
+                    f"{content_label}：{content}",
                 ]
             )
         )

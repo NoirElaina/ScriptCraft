@@ -21,3 +21,4 @@ class Chapter(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     project = relationship("Project", back_populates="chapters")
+    analysis = relationship("ChapterAnalysis", back_populates="chapter", cascade="all, delete-orphan", uselist=False)
