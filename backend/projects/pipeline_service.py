@@ -1,15 +1,17 @@
 from collections.abc import Callable
 from time import perf_counter
-from typing import Any
+from typing import Any, Iterator
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from chapter_analysis import ChapterAnalyzer
 from chapter_parser import ChapterParseError, ChapterParser
 from llm import LLMConfigError, LLMResponseError, create_chat_model_from_env
 from models.ai_run import AIRun
 from models.chapter import Chapter
+from models.chapter_analysis import ChapterAnalysis
 from models.project import Project
 from models.script_version import ScriptVersion
 from models.story_element import StoryElement
@@ -17,7 +19,9 @@ from script_yaml import ScriptYamlGenerator
 from story_elements import StoryElementExtractor
 from .schemas import (
     AIRunResponse,
+    ChapterAnalysisItemResponse,
     ChapterItemResponse,
+    ProjectChapterAnalysesResponse,
     ProjectChaptersResponse,
     ProjectResponse,
     ProjectScriptYamlResponse,
@@ -30,6 +34,7 @@ from .service import ProjectNotFoundError, assign_owner_if_needed, get_project
 
 
 ModelFactory = Callable[[], BaseChatModel]
+ProjectPipelineEvent = dict[str, Any]
 
 
 class ProjectPipelineError(RuntimeError):
@@ -50,6 +55,7 @@ def parse_and_save_chapters(
     except ChapterParseError:
         raise
 
+    session.execute(delete(ChapterAnalysis).where(ChapterAnalysis.project_id == project.id))
     session.execute(delete(Chapter).where(Chapter.project_id == project.id))
     project.source_text = source_text
     project.status = "chapters_ready"
@@ -77,6 +83,165 @@ def parse_and_save_chapters(
     )
 
 
+def analyze_and_save_chapters(
+    session: Session,
+    project_id: int,
+    owner_id: int,
+    model_factory: ModelFactory = create_chat_model_from_env,
+) -> ProjectChapterAnalysesResponse:
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
+    chapters = _require_chapters(session, project)
+    input_payload = {
+        "title": project.title,
+        "chapters": [
+            {
+                "id": chapter.chapter_key,
+                "index": chapter.chapter_index,
+                "heading": chapter.heading,
+                "title": chapter.title,
+            }
+            for chapter in chapters
+        ],
+    }
+    ai_run = _create_ai_run(session, project.id, "chapter_analysis", input_payload)
+    started_at = perf_counter()
+
+    try:
+        model = model_factory()
+        analyzer = ChapterAnalyzer(model)
+        analyses = [
+            _build_chapter_analysis(project.id, chapter, analyzer.analyze(project.title, _chapter_payload(chapter)))
+            for chapter in chapters
+        ]
+    except (LLMConfigError, LLMResponseError) as exc:
+        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
+        session.commit()
+        raise
+
+    session.execute(delete(ChapterAnalysis).where(ChapterAnalysis.project_id == project.id))
+    project.status = "chapter_analyses_ready"
+    session.add_all(analyses)
+    session.flush()
+    _finish_ai_run(
+        session,
+        ai_run,
+        "succeeded",
+        started_at,
+        output_payload={"chapter_analyses": [analysis.analysis for analysis in analyses]},
+    )
+    session.commit()
+
+    chapter_analyses = _list_chapter_analyses(session, project.id)
+    return ProjectChapterAnalysesResponse(
+        project_id=project.id,
+        title=project.title,
+        ai_run_id=ai_run.id,
+        chapter_analyses=[_chapter_analysis_response(analysis) for analysis in chapter_analyses],
+    )
+
+
+def stream_analyze_and_save_chapters(
+    session: Session,
+    project_id: int,
+    owner_id: int,
+    model_factory: ModelFactory = create_chat_model_from_env,
+) -> Iterator[ProjectPipelineEvent]:
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
+    chapters = _require_chapters(session, project)
+    input_payload = {
+        "title": project.title,
+        "chapters": [
+            {
+                "id": chapter.chapter_key,
+                "index": chapter.chapter_index,
+                "heading": chapter.heading,
+                "title": chapter.title,
+            }
+            for chapter in chapters
+        ],
+    }
+    session.execute(delete(ChapterAnalysis).where(ChapterAnalysis.project_id == project.id))
+    project.status = "chapter_analysis_running"
+    ai_run = _create_ai_run(session, project.id, "chapter_analysis", input_payload)
+    started_at = perf_counter()
+    output_payloads: list[dict[str, Any]] = []
+
+    yield {
+        "type": "started",
+        "project_id": project.id,
+        "title": project.title,
+        "ai_run_id": ai_run.id,
+        "total": len(chapters),
+        "message": f"开始分析 {len(chapters)} 个章节",
+    }
+
+    try:
+        model = model_factory()
+        analyzer = ChapterAnalyzer(model)
+
+        for position, chapter in enumerate(chapters, start=1):
+            yield {
+                "type": "chapter_started",
+                "project_id": project.id,
+                "ai_run_id": ai_run.id,
+                "chapter": _chapter_brief(chapter),
+                "progress": {"current": position, "total": len(chapters)},
+                "message": f"正在分析第 {chapter.chapter_index} 章：{chapter.title}",
+            }
+
+            analysis_payload = analyzer.analyze(project.title, _chapter_payload(chapter))
+            output_payloads.append(analysis_payload)
+            chapter_analysis = _build_chapter_analysis(project.id, chapter, analysis_payload)
+            session.add(chapter_analysis)
+            session.flush()
+            session.refresh(chapter_analysis)
+            session.commit()
+
+            yield {
+                "type": "chapter_completed",
+                "project_id": project.id,
+                "ai_run_id": ai_run.id,
+                "chapter_analysis": _chapter_analysis_response(chapter_analysis).model_dump(mode="json"),
+                "progress": {"current": position, "total": len(chapters)},
+                "message": f"第 {chapter.chapter_index} 章分析完成",
+            }
+    except (LLMConfigError, LLMResponseError) as exc:
+        project.status = "chapter_analysis_failed"
+        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
+        session.commit()
+        yield {
+            "type": "error",
+            "project_id": project.id,
+            "ai_run_id": ai_run.id,
+            "message": str(exc),
+        }
+        return
+
+    project.status = "chapter_analyses_ready"
+    _finish_ai_run(
+        session,
+        ai_run,
+        "succeeded",
+        started_at,
+        output_payload={"chapter_analyses": output_payloads},
+    )
+    session.commit()
+    chapter_analyses = _list_chapter_analyses(session, project.id)
+
+    yield {
+        "type": "completed",
+        "project_id": project.id,
+        "title": project.title,
+        "ai_run_id": ai_run.id,
+        "chapter_analyses": [
+            _chapter_analysis_response(analysis).model_dump(mode="json") for analysis in chapter_analyses
+        ],
+        "message": "全部章节分析完成",
+    }
+
+
 def extract_and_save_story_elements(
     session: Session,
     project_id: int,
@@ -85,8 +250,8 @@ def extract_and_save_story_elements(
 ) -> ProjectStoryElementsResponse:
     project = get_project(session, project_id, owner_id)
     assign_owner_if_needed(project, owner_id)
-    chapters = _require_chapters(session, project)
-    input_payload = {"title": project.title, "chapters": [_chapter_payload(chapter) for chapter in chapters]}
+    chapters = _require_chapter_analysis_contexts(session, project)
+    input_payload = {"title": project.title, "chapters": chapters}
     ai_run = _create_ai_run(session, project.id, "story_elements", input_payload)
     started_at = perf_counter()
 
@@ -127,14 +292,14 @@ def generate_and_save_script_yaml(
 ) -> ProjectScriptYamlResponse:
     project = get_project(session, project_id, owner_id)
     assign_owner_if_needed(project, owner_id)
-    chapters = _require_chapters(session, project)
+    chapters = _require_chapter_analysis_contexts(session, project)
     story_element = _require_latest_story_elements(session, project)
     characters = story_element.characters
     locations = story_element.locations
     events = story_element.events
     input_payload = {
         "title": project.title,
-        "chapters": [_chapter_payload(chapter) for chapter in chapters],
+        "chapters": chapters,
         "characters": characters,
         "locations": locations,
         "events": events,
@@ -180,6 +345,7 @@ def generate_and_save_script_yaml(
 def get_project_workspace(session: Session, project_id: int, owner_id: int) -> ProjectWorkspaceResponse:
     project = get_project(session, project_id, owner_id)
     chapters = [_chapter_response(chapter) for chapter in _list_chapters(session, project.id)]
+    chapter_analyses = [_chapter_analysis_response(analysis) for analysis in _list_chapter_analyses(session, project.id)]
     story_element = _latest_story_elements(session, project.id)
     script_version = _latest_script_version(session, project.id)
     ai_runs = session.scalars(
@@ -189,6 +355,7 @@ def get_project_workspace(session: Session, project_id: int, owner_id: int) -> P
     return ProjectWorkspaceResponse(
         project=ProjectResponse.model_validate(project),
         chapters=chapters,
+        chapter_analyses=chapter_analyses,
         story_elements=_story_elements_response(story_element) if story_element else None,
         script_version=ScriptVersionResponse.model_validate(script_version) if script_version else None,
         ai_runs=[AIRunResponse.model_validate(ai_run) for ai_run in ai_runs],
@@ -208,6 +375,26 @@ def _require_chapters(session: Session, project: Project) -> list[Chapter]:
     if len(chapters) < 3:
         raise ProjectPipelineError("项目至少需要先保存 3 个章节")
     return chapters
+
+
+def _list_chapter_analyses(session: Session, project_id: int) -> list[ChapterAnalysis]:
+    return list(
+        session.scalars(
+            select(ChapterAnalysis)
+            .where(ChapterAnalysis.project_id == project_id)
+            .order_by(ChapterAnalysis.chapter_index.asc(), ChapterAnalysis.id.asc())
+        )
+    )
+
+
+def _require_chapter_analysis_contexts(session: Session, project: Project) -> list[dict[str, Any]]:
+    chapters = _list_chapters(session, project.id)
+    analyses = _list_chapter_analyses(session, project.id)
+    if len(chapters) < 3:
+        raise ProjectPipelineError("项目至少需要先保存 3 个章节")
+    if len(analyses) < len(chapters):
+        raise ProjectPipelineError("项目需要先完成 AI 章节分析")
+    return [_chapter_analysis_context(analysis) for analysis in analyses]
 
 
 def _latest_story_elements(session: Session, project_id: int) -> StoryElement | None:
@@ -250,6 +437,41 @@ def _chapter_payload(chapter: Chapter) -> dict[str, Any]:
 
 def _chapter_response(chapter: Chapter) -> ChapterItemResponse:
     return ChapterItemResponse(**_chapter_payload(chapter))
+
+
+def _chapter_brief(chapter: Chapter) -> dict[str, Any]:
+    return {
+        "id": chapter.chapter_key,
+        "index": chapter.chapter_index,
+        "heading": chapter.heading,
+        "title": chapter.title,
+    }
+
+
+def _build_chapter_analysis(project_id: int, chapter: Chapter, analysis: dict[str, Any]) -> ChapterAnalysis:
+    return ChapterAnalysis(
+        project_id=project_id,
+        chapter_id=chapter.id,
+        chapter_key=chapter.chapter_key,
+        chapter_index=chapter.chapter_index,
+        summary=analysis["summary"],
+        analysis=analysis,
+    )
+
+
+def _chapter_analysis_response(analysis: ChapterAnalysis) -> ChapterAnalysisItemResponse:
+    return ChapterAnalysisItemResponse.model_validate(analysis)
+
+
+def _chapter_analysis_context(analysis: ChapterAnalysis) -> dict[str, Any]:
+    return {
+        "id": analysis.chapter_key,
+        "index": analysis.chapter_index,
+        "heading": analysis.analysis.get("heading", ""),
+        "title": analysis.analysis.get("title", ""),
+        "summary": analysis.summary,
+        "analysis": analysis.analysis,
+    }
 
 
 def _story_elements_response(story_element: StoryElement) -> StoryElementsSnapshotResponse:

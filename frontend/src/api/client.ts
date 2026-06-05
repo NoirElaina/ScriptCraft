@@ -23,18 +23,31 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
     },
   })
 
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  const payload = await response.json()
+  const responseText = await response.text()
+  const payload = responseText ? parseResponsePayload(responseText) : undefined
 
   if (!response.ok) {
     if (response.status === 401) {
       clearAuthToken()
     }
-    throw new Error(payload.detail ?? '请求失败')
+    const message =
+      typeof payload === 'object' && payload !== null && 'detail' in payload
+        ? String(payload.detail)
+        : responseText || '请求失败'
+    throw new Error(message)
   }
 
-  return payload
+  if (response.status === 204) {
+    return undefined as T
+  }
+
+  return payload as T
+}
+
+function parseResponsePayload(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
 }

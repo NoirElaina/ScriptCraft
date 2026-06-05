@@ -20,6 +20,7 @@ class Project(Base):
 
     owner = relationship("User", back_populates="projects")
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")
+    chapter_analyses = relationship("ChapterAnalysis", back_populates="project", cascade="all, delete-orphan")
     story_elements = relationship("StoryElement", back_populates="project", cascade="all, delete-orphan")
     script_versions = relationship("ScriptVersion", back_populates="project", cascade="all, delete-orphan")
     ai_runs = relationship("AIRun", back_populates="project", cascade="all, delete-orphan")

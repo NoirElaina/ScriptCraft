@@ -68,6 +68,30 @@ CREATE TABLE IF NOT EXISTS chapters (
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS chapter_analyses (
+  id INT NOT NULL AUTO_INCREMENT,
+  project_id INT NOT NULL,
+  chapter_id INT NOT NULL,
+  chapter_key VARCHAR(80) NOT NULL,
+  chapter_index INT NOT NULL,
+  summary TEXT NOT NULL,
+  analysis JSON NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_chapter_analyses_project_chapter (project_id, chapter_id),
+  KEY ix_chapter_analyses_project_id (project_id),
+  KEY ix_chapter_analyses_chapter_id (chapter_id),
+  KEY ix_chapter_analyses_chapter_key (chapter_key),
+  KEY ix_chapter_analyses_chapter_index (chapter_index),
+  CONSTRAINT fk_chapter_analyses_project_id_projects
+    FOREIGN KEY (project_id) REFERENCES projects (id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_chapter_analyses_chapter_id_chapters
+    FOREIGN KEY (chapter_id) REFERENCES chapters (id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS story_elements (
   id INT NOT NULL AUTO_INCREMENT,
   project_id INT NOT NULL,

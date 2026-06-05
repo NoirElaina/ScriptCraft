@@ -19,13 +19,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatTime, runStatusClass, taskLabel } from '@/lib/workspace-formatters'
 import ScriptYamlPanel from './ScriptYamlPanel.vue'
 
+interface ChapterAnalysisLogItem {
+  id: string
+  status: 'running' | 'succeeded' | 'failed'
+  message: string
+  createdAt: string
+}
+
 const props = defineProps<{
   chaptersLength: number
+  chapterAnalysesLength: number
   storyElements?: StoryElementsSnapshot
   scriptYaml: string
   scriptVersionName?: string
   aiRuns: AIRun[]
+  chapterAnalysisLogs: ChapterAnalysisLogItem[]
   isLoadingWorkspace: boolean
+  isAnalyzingChapters: boolean
   isExtracting: boolean
   isGeneratingYaml: boolean
 }>()
@@ -35,6 +45,7 @@ const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 
 const emit = defineEmits<{
   refresh: []
+  analyzeChapters: []
   extractStoryElements: []
   generateScriptYaml: []
 }>()
@@ -78,6 +89,52 @@ const emit = defineEmits<{
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <div class="flex items-center gap-2 text-sm font-medium">
+                      <CheckCircle2
+                        v-if="chapterAnalysesLength >= chaptersLength && chaptersLength >= 3"
+                        class="size-4 text-emerald-600"
+                      />
+                      <span v-else class="size-4 rounded-full border" />
+                      AI 章节分析
+                    </div>
+                    <p class="mt-2 text-sm text-muted-foreground">
+                      已分析 {{ chapterAnalysesLength }} / {{ chaptersLength }} 章，后续步骤复用结构化结果。
+                    </p>
+                  </div>
+                  <Button
+                    :disabled="isAnalyzingChapters || chaptersLength < 3"
+                    class="shrink-0"
+                    @click="emit('analyzeChapters')"
+                  >
+                    <Loader2 v-if="isAnalyzingChapters" class="size-4 animate-spin" />
+                    <Sparkles v-else class="size-4" />
+                    分析
+                  </Button>
+                </div>
+                <div v-if="chapterAnalysisLogs.length > 0" class="mt-3 space-y-2 border-t pt-3">
+                  <div
+                    v-for="log in chapterAnalysisLogs"
+                    :key="log.id"
+                    class="flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs"
+                  >
+                    <Loader2
+                      v-if="log.status === 'running'"
+                      class="mt-0.5 size-3.5 shrink-0 animate-spin text-sky-600"
+                    />
+                    <CheckCircle2
+                      v-else-if="log.status === 'succeeded'"
+                      class="mt-0.5 size-3.5 shrink-0 text-emerald-600"
+                    />
+                    <span v-else class="mt-1.5 size-2 shrink-0 rounded-full bg-destructive" />
+                    <span class="min-w-0 flex-1 leading-5">{{ log.message }}</span>
+                    <span class="shrink-0 text-muted-foreground">{{ formatTime(log.createdAt) }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-lg border bg-background p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="flex items-center gap-2 text-sm font-medium">
                       <CheckCircle2 v-if="storyElements" class="size-4 text-emerald-600" />
                       <span v-else class="size-4 rounded-full border" />
                       AI 故事元素抽取
@@ -89,7 +146,7 @@ const emit = defineEmits<{
                     </p>
                   </div>
                   <Button
-                    :disabled="isExtracting || chaptersLength < 3"
+                    :disabled="isExtracting || chapterAnalysesLength < chaptersLength || chaptersLength < 3"
                     class="shrink-0"
                     @click="emit('extractStoryElements')"
                   >

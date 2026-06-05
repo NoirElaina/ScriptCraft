@@ -66,6 +66,27 @@ class ProjectChaptersResponse(BaseModel):
     chapters: list[ChapterItemResponse]
 
 
+class ChapterAnalysisItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    chapter_id: int
+    chapter_key: str
+    chapter_index: int
+    summary: str
+    analysis: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectChapterAnalysesResponse(BaseModel):
+    project_id: int
+    title: str
+    ai_run_id: int
+    chapter_analyses: list[ChapterAnalysisItemResponse]
+
+
 class CharacterItemResponse(BaseModel):
     id: str
     name: str
@@ -140,6 +161,7 @@ class AIRunResponse(BaseModel):
 class ProjectWorkspaceResponse(BaseModel):
     project: ProjectResponse
     chapters: list[ChapterItemResponse]
+    chapter_analyses: list[ChapterAnalysisItemResponse]
     story_elements: StoryElementsSnapshotResponse | None
     script_version: ScriptVersionResponse | None
     ai_runs: list[AIRunResponse]

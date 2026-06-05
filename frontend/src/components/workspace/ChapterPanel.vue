@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { BookOpen } from '@lucide/vue'
+import { BookOpen, Clapperboard, MessageSquareText, Users } from '@lucide/vue'
 
+import type { ChapterAnalysis } from '@/api/projects'
 import type { Chapter } from '@/api/chapters'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,6 +11,7 @@ import { normalizeNovelText } from '@/lib/novel-text'
 
 const props = defineProps<{
   chapters: Chapter[]
+  chapterAnalyses: ChapterAnalysis[]
   chapterCoverageLabel: string
 }>()
 
@@ -23,6 +25,11 @@ const selectedChapter = computed(() => {
 
 const selectedChapterContent = computed(() => {
   return selectedChapter.value ? normalizeNovelText(selectedChapter.value.content) : ''
+})
+
+const selectedChapterAnalysis = computed(() => {
+  if (!selectedChapter.value) return undefined
+  return props.chapterAnalyses.find((analysis) => analysis.chapter_key === selectedChapter.value?.id)
 })
 </script>
 
@@ -80,6 +87,72 @@ const selectedChapterContent = computed(() => {
         <ScrollArea class="min-h-0 flex-1">
           <div v-if="selectedChapter" class="space-y-4 p-4">
             <p class="whitespace-pre-wrap text-sm leading-7">{{ selectedChapterContent }}</p>
+
+            <div v-if="selectedChapterAnalysis" class="space-y-3 rounded-lg border bg-muted/30 p-4">
+              <div>
+                <p class="text-sm font-medium">AI 章节分析</p>
+                <p class="mt-2 text-sm leading-6 text-muted-foreground">
+                  {{ selectedChapterAnalysis.summary }}
+                </p>
+              </div>
+
+              <div class="grid gap-3 xl:grid-cols-2">
+                <div class="rounded-md bg-background p-3">
+                  <div class="flex items-center gap-2 text-sm font-medium">
+                    <Users class="size-4" />
+                    出场角色
+                  </div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <Badge
+                      v-for="character in selectedChapterAnalysis.analysis.characters"
+                      :key="character.name"
+                      variant="outline"
+                    >
+                      {{ character.name }}
+                    </Badge>
+                    <span
+                      v-if="selectedChapterAnalysis.analysis.characters.length === 0"
+                      class="text-xs text-muted-foreground"
+                    >
+                      未识别角色
+                    </span>
+                  </div>
+                </div>
+
+                <div class="rounded-md bg-background p-3">
+                  <div class="flex items-center gap-2 text-sm font-medium">
+                    <MessageSquareText class="size-4" />
+                    对白素材
+                  </div>
+                  <p class="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                    {{ selectedChapterAnalysis.analysis.dialogue_candidates[0] ?? '暂无对白素材' }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="rounded-md bg-background p-3">
+                <div class="flex items-center gap-2 text-sm font-medium">
+                  <Clapperboard class="size-4" />
+                  可改编场景
+                </div>
+                <div class="mt-3 space-y-2">
+                  <div
+                    v-for="scene in selectedChapterAnalysis.analysis.scene_candidates"
+                    :key="scene.title"
+                    class="rounded-md border p-3"
+                  >
+                    <p class="text-sm font-medium">{{ scene.title }}</p>
+                    <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ scene.summary }}</p>
+                  </div>
+                  <p
+                    v-if="selectedChapterAnalysis.analysis.scene_candidates.length === 0"
+                    class="text-xs text-muted-foreground"
+                  >
+                    暂无候选场景。
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-else class="p-4 text-sm text-muted-foreground">暂无章节正文。</div>
         </ScrollArea>

@@ -17,8 +17,11 @@ import {
   getProjectWorkspace,
   listProjects,
   parseProjectChapters,
+  streamProjectChapterAnalyses,
   updateProject,
   type AIRun,
+  type ChapterAnalysis,
+  type ChapterAnalysisStreamEvent,
   type ProjectListItem,
   type ProjectWorkspaceResponse,
   type StoryElementsSnapshot,
@@ -33,6 +36,13 @@ import ProjectSwitcher from '@/components/workspace/ProjectSwitcher.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { normalizeNovelText } from '@/lib/novel-text'
+
+interface ChapterAnalysisLogItem {
+  id: string
+  status: 'running' | 'succeeded' | 'failed'
+  message: string
+  createdAt: string
+}
 
 const currentUser = ref<AuthUser>()
 const projects = ref<ProjectListItem[]>([])
@@ -49,6 +59,7 @@ const isCreatingProject = ref(false)
 const isLoadingWorkspace = ref(false)
 const isSavingProject = ref(false)
 const isParsing = ref(false)
+const isAnalyzingChapters = ref(false)
 const isExtracting = ref(false)
 const isGeneratingYaml = ref(false)
 const isDeletingProject = ref(false)
@@ -58,9 +69,11 @@ const isLoggingOut = ref(false)
 const projectErrorMessage = ref('')
 const workspaceErrorMessage = ref('')
 const pipelineErrorMessage = ref('')
+const chapterAnalysisLogs = ref<ChapterAnalysisLogItem[]>([])
 
 const currentProject = computed(() => workspace.value?.project)
 const chapters = computed(() => workspace.value?.chapters ?? [])
+const chapterAnalyses = computed<ChapterAnalysis[]>(() => workspace.value?.chapter_analyses ?? [])
 const storyElements = computed<StoryElementsSnapshot | undefined>(() => {
   return workspace.value?.story_elements ?? undefined
 })
@@ -75,6 +88,11 @@ const storyElementsCountLabel = computed(() => {
 const chapterCoverageLabel = computed(() => {
   if (chapters.value.length === 0) return '未解析'
   return chapters.value.length >= 3 ? '符合 3 章要求' : '章节不足'
+})
+
+const chapterAnalysisLabel = computed(() => {
+  if (chapters.value.length === 0) return '无章节分析'
+  return `章节分析 ${chapterAnalyses.value.length}/${chapters.value.length}`
 })
 
 const editorErrorMessage = computed(() => {
@@ -252,6 +270,27 @@ async function handleParseProjectChapters() {
   }
 }
 
+async function handleAnalyzeProjectChapters() {
+  const project = currentProject.value
+  if (!project) return
+
+  pipelineErrorMessage.value = ''
+  chapterAnalysisLogs.value = []
+  isAnalyzingChapters.value = true
+  activeFlowTab.value = 'pipeline'
+
+  try {
+    await streamProjectChapterAnalyses(project.id, handleChapterAnalysisStreamEvent)
+    if (currentProject.value?.id === project.id) {
+      await refreshWorkspace()
+    }
+  } catch (error) {
+    pipelineErrorMessage.value = error instanceof Error ? error.message : '章节分析失败'
+  } finally {
+    isAnalyzingChapters.value = false
+  }
+}
+
 async function handleExtractStoryElements() {
   const project = currentProject.value
   if (!project) return
@@ -298,9 +337,77 @@ function applyWorkspace(result: ProjectWorkspaceResponse) {
   selectedChapterId.value = result.chapters[0]?.id
 }
 
+function handleChapterAnalysisStreamEvent(event: ChapterAnalysisStreamEvent) {
+  if (event.type === 'started') {
+    if (workspace.value?.project.id === event.project_id) {
+      workspace.value = { ...workspace.value, chapter_analyses: [] }
+    }
+    appendChapterAnalysisLog('running', event.message)
+    return
+  }
+
+  if (event.type === 'chapter_started') {
+    selectedChapterId.value = event.chapter.id
+    appendChapterAnalysisLog('running', event.message)
+    return
+  }
+
+  if (event.type === 'chapter_completed') {
+    applyChapterAnalysis(event.chapter_analysis)
+    selectedChapterId.value = event.chapter_analysis.chapter_key
+    appendChapterAnalysisLog('succeeded', event.message)
+    return
+  }
+
+  if (event.type === 'completed') {
+    applyChapterAnalyses(event.project_id, event.chapter_analyses)
+    appendChapterAnalysisLog('succeeded', event.message)
+    return
+  }
+
+  pipelineErrorMessage.value = event.message
+  appendChapterAnalysisLog('failed', event.message)
+}
+
+function applyChapterAnalysis(analysis: ChapterAnalysis) {
+  if (!workspace.value || workspace.value.project.id !== analysis.project_id) return
+
+  const chapterAnalyses = [...workspace.value.chapter_analyses]
+  const index = chapterAnalyses.findIndex((item) => item.chapter_id === analysis.chapter_id)
+  if (index >= 0) {
+    chapterAnalyses[index] = analysis
+  } else {
+    chapterAnalyses.push(analysis)
+  }
+  chapterAnalyses.sort((left, right) => left.chapter_index - right.chapter_index)
+  workspace.value = { ...workspace.value, chapter_analyses: chapterAnalyses }
+}
+
+function applyChapterAnalyses(projectId: number, analyses: ChapterAnalysis[]) {
+  if (!workspace.value || workspace.value.project.id !== projectId) return
+
+  workspace.value = {
+    ...workspace.value,
+    chapter_analyses: [...analyses].sort((left, right) => left.chapter_index - right.chapter_index),
+  }
+}
+
+function appendChapterAnalysisLog(status: ChapterAnalysisLogItem['status'], message: string) {
+  chapterAnalysisLogs.value = [
+    ...chapterAnalysisLogs.value,
+    {
+      id: `${Date.now()}-${chapterAnalysisLogs.value.length}`,
+      status,
+      message,
+      createdAt: new Date().toISOString(),
+    },
+  ]
+}
+
 function clearDraftText() {
   novelText.value = ''
   pipelineErrorMessage.value = ''
+  chapterAnalysisLogs.value = []
 }
 
 function tidyDraftText(): string {
@@ -366,6 +473,7 @@ function resetWorkspace() {
           <div class="flex flex-wrap justify-end gap-2">
             <Badge variant="secondary">{{ projects.length }} 个项目</Badge>
             <Badge variant="outline">{{ chapters.length }} 章</Badge>
+            <Badge variant="outline">{{ chapterAnalysisLabel }}</Badge>
             <Badge variant="outline">{{ storyElementsCountLabel }}</Badge>
             <Badge variant="outline">{{ scriptVersionName ?? '无剧本版本' }}</Badge>
           </div>
@@ -400,6 +508,7 @@ function resetWorkspace() {
           <ChapterPanel
             v-model:selected-chapter-id="selectedChapterId"
             :chapters="chapters"
+            :chapter-analyses="chapterAnalyses"
             :chapter-coverage-label="chapterCoverageLabel"
           />
 
@@ -407,14 +516,18 @@ function resetWorkspace() {
             v-model:active-flow-tab="activeFlowTab"
             v-model:active-yaml-tab="activeYamlTab"
             :chapters-length="chapters.length"
+            :chapter-analyses-length="chapterAnalyses.length"
             :story-elements="storyElements"
             :script-yaml="scriptYaml"
             :script-version-name="scriptVersionName"
             :ai-runs="aiRuns"
+            :chapter-analysis-logs="chapterAnalysisLogs"
             :is-loading-workspace="isLoadingWorkspace"
+            :is-analyzing-chapters="isAnalyzingChapters"
             :is-extracting="isExtracting"
             :is-generating-yaml="isGeneratingYaml"
             @refresh="refreshWorkspace"
+            @analyze-chapters="handleAnalyzeProjectChapters"
             @extract-story-elements="handleExtractStoryElements"
             @generate-script-yaml="handleGenerateScriptYaml"
           />
