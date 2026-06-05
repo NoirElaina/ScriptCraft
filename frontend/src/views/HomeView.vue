@@ -49,7 +49,8 @@ async function handleParse() {
   isParsing.value = true
 
   try {
-    const result = await parseChapters(novelText.value)
+    const result = await parseChapters(title.value, novelText.value)
+    title.value = result.title
     chapters.value = result.chapters
     selectedChapterId.value = result.chapters[0]?.id
   } catch (error) {
