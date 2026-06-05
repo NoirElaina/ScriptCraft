@@ -7,17 +7,18 @@ export interface Chapter {
 }
 
 export interface ChapterParseResponse {
+  title: string
   chapter_count: number
   chapters: Chapter[]
 }
 
-export async function parseChapters(text: string): Promise<ChapterParseResponse> {
+export async function parseChapters(title: string, text: string): Promise<ChapterParseResponse> {
   const response = await fetch('/api/novels/chapters', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ title, text }),
   })
 
   const payload = await response.json()

@@ -9,6 +9,7 @@ app = FastAPI(title="ScriptCraft API")
 
 
 class NovelChapterRequest(BaseModel):
+    title: str = Field(default="未命名小说", max_length=120, description="小说作品名")
     text: str = Field(min_length=1, description="包含 3 个章节以上的小说文本")
 
 
@@ -21,6 +22,7 @@ class ChapterResponse(BaseModel):
 
 
 class NovelChaptersResponse(BaseModel):
+    title: str
     chapter_count: int
     chapters: list[ChapterResponse]
 
@@ -37,7 +39,10 @@ def create_novel_chapters(request: NovelChapterRequest) -> NovelChaptersResponse
     except ChapterParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    title = request.title.strip() or "未命名小说"
+
     return NovelChaptersResponse(
+        title=title,
         chapter_count=len(chapters),
         chapters=[ChapterResponse(**chapter.__dict__) for chapter in chapters],
     )
