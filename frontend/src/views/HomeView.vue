@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Loader2, LogOut, Sparkles } from '@lucide/vue'
+import { Loader2, Sparkles } from '@lucide/vue'
 
 import {
   getCurrentUser,
@@ -24,6 +24,7 @@ import {
   type StoryElementsSnapshot,
 } from '@/api/projects'
 import AuthPanel from '@/components/auth/AuthPanel.vue'
+import UserAccountMenu from '@/components/auth/UserAccountMenu.vue'
 import ChapterPanel from '@/components/workspace/ChapterPanel.vue'
 import EmptyProjectState from '@/components/workspace/EmptyProjectState.vue'
 import NovelEditorPanel from '@/components/workspace/NovelEditorPanel.vue'
@@ -117,6 +118,10 @@ async function handleLogout() {
     projects.value = []
     isLoggingOut.value = false
   }
+}
+
+function showAiRunHistory() {
+  activeFlowTab.value = 'pipeline'
 }
 
 async function loadProjectList() {
@@ -336,31 +341,33 @@ function resetWorkspace() {
           </div>
         </div>
         <div v-if="currentUser" class="flex flex-col items-stretch gap-2 sm:items-end">
-          <ProjectSwitcher
-            v-model:new-project-title="newProjectTitle"
-            :projects="projects"
-            :current-project-id="currentProject?.id"
-            :current-project-title="currentProject?.title"
-            :is-loading-projects="isLoadingProjects"
-            :is-creating-project="isCreatingProject"
-            :is-deleting-project="isDeletingProject"
-            :error-message="projectErrorMessage"
-            @refresh="loadProjectList"
-            @create="handleCreateProject"
-            @open="openProject"
-            @delete-project="handleDeleteProject"
-          />
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <ProjectSwitcher
+              v-model:new-project-title="newProjectTitle"
+              :projects="projects"
+              :current-project-id="currentProject?.id"
+              :current-project-title="currentProject?.title"
+              :is-loading-projects="isLoadingProjects"
+              :is-creating-project="isCreatingProject"
+              :is-deleting-project="isDeletingProject"
+              :error-message="projectErrorMessage"
+              @refresh="loadProjectList"
+              @create="handleCreateProject"
+              @open="openProject"
+              @delete-project="handleDeleteProject"
+            />
+            <UserAccountMenu
+              :user="currentUser"
+              :is-logging-out="isLoggingOut"
+              @show-runs="showAiRunHistory"
+              @logout="handleLogout"
+            />
+          </div>
           <div class="flex flex-wrap justify-end gap-2">
-            <Badge variant="outline">{{ currentUser.username }}</Badge>
             <Badge variant="secondary">{{ projects.length }} 个项目</Badge>
             <Badge variant="outline">{{ chapters.length }} 章</Badge>
             <Badge variant="outline">{{ storyElementsCountLabel }}</Badge>
             <Badge variant="outline">{{ scriptVersionName ?? '无剧本版本' }}</Badge>
-            <Button size="sm" variant="outline" :disabled="isLoggingOut" @click="handleLogout">
-              <Loader2 v-if="isLoggingOut" class="size-3.5 animate-spin" />
-              <LogOut v-else class="size-3.5" />
-              退出
-            </Button>
           </div>
         </div>
       </header>
