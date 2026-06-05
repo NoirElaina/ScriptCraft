@@ -70,9 +70,9 @@ function clearWorkspace() {
 </script>
 
 <template>
-  <main class="min-h-screen bg-muted/30 text-foreground">
-    <section class="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-      <header class="flex flex-col gap-3 border-b bg-background/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
+  <main class="h-screen overflow-hidden bg-muted/30 text-foreground">
+    <section class="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+      <header class="shrink-0 flex flex-col gap-3 border-b bg-background/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div class="space-y-1">
           <div class="flex items-center gap-2">
             <div class="flex size-9 items-center justify-center rounded-lg border bg-card">
@@ -92,26 +92,26 @@ function clearWorkspace() {
       </header>
 
       <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)_420px]">
-        <Card class="min-h-0">
-          <CardHeader>
+        <Card class="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader class="shrink-0">
             <CardTitle class="flex items-center gap-2 text-base">
               <FileText class="size-4" />
               小说输入
             </CardTitle>
             <CardDescription>粘贴 3 个章节以上的小说文本，先完成章节结构识别。</CardDescription>
           </CardHeader>
-          <CardContent class="flex min-h-[560px] flex-col gap-4">
+          <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             <div class="grid gap-2">
               <Label for="novel-title">作品名</Label>
               <Input id="novel-title" v-model="title" placeholder="输入小说标题" />
             </div>
 
-            <div class="flex min-h-0 flex-1 flex-col gap-2">
+            <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
               <Label for="novel-text">小说正文</Label>
               <Textarea
                 id="novel-text"
                 v-model="novelText"
-                class="min-h-[360px] flex-1 resize-none leading-7"
+                class="min-h-0 flex-1 resize-none overflow-y-auto leading-7"
                 placeholder="第一章 ...&#10;&#10;第二章 ...&#10;&#10;第三章 ..."
               />
             </div>
@@ -135,8 +135,8 @@ function clearWorkspace() {
           </CardContent>
         </Card>
 
-        <Card class="min-h-0">
-          <CardHeader>
+        <Card class="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader class="shrink-0">
             <div class="flex items-start justify-between gap-3">
               <div>
                 <CardTitle class="flex items-center gap-2 text-base">
@@ -148,13 +148,13 @@ function clearWorkspace() {
               <Badge :variant="chapters.length >= 3 ? 'default' : 'secondary'">{{ chapterCoverageLabel }}</Badge>
             </div>
           </CardHeader>
-          <CardContent class="grid min-h-[560px] gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <div class="rounded-lg border bg-background">
-              <div class="flex items-center justify-between border-b px-3 py-2">
+          <CardContent class="grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)]">
+            <div class="flex min-h-0 flex-col rounded-lg border bg-background">
+              <div class="shrink-0 flex items-center justify-between border-b px-3 py-2">
                 <span class="text-sm font-medium">章节列表</span>
                 <Badge variant="outline">{{ chapters.length }} 章</Badge>
               </div>
-              <ScrollArea class="h-[500px]">
+              <ScrollArea class="min-h-0 flex-1">
                 <div v-if="chapters.length === 0" class="p-4 text-sm text-muted-foreground">
                   暂无章节。请先在左侧输入小说正文并点击解析。
                 </div>
@@ -171,15 +171,15 @@ function clearWorkspace() {
               </ScrollArea>
             </div>
 
-            <div class="rounded-lg border bg-background">
-              <div class="flex items-center justify-between border-b px-4 py-3">
+            <div class="flex min-h-0 flex-col rounded-lg border bg-background">
+              <div class="shrink-0 flex items-center justify-between border-b px-4 py-3">
                 <div>
                   <p class="text-sm font-medium">{{ selectedChapter?.title ?? '章节详情' }}</p>
                   <p class="text-xs text-muted-foreground">{{ selectedChapter?.id ?? '等待选择章节' }}</p>
                 </div>
                 <Badge v-if="selectedChapter" variant="secondary">第 {{ selectedChapter.index }} 章</Badge>
               </div>
-              <ScrollArea class="h-[500px]">
+              <ScrollArea class="min-h-0 flex-1">
                 <div v-if="selectedChapter" class="space-y-4 p-4">
                   <p class="whitespace-pre-wrap text-sm leading-7">{{ selectedChapter.content }}</p>
                 </div>
@@ -191,18 +191,20 @@ function clearWorkspace() {
           </CardContent>
         </Card>
 
-        <Card class="min-h-0">
-          <CardHeader>
+        <Card class="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader class="shrink-0">
             <CardTitle class="text-base">剧本生成流程</CardTitle>
             <CardDescription>当前先完成章节入口，后续继续接入 AI 结构化生成。</CardDescription>
           </CardHeader>
-          <CardContent class="min-h-[560px]">
-            <Tabs default-value="pipeline">
-              <TabsList class="grid w-full grid-cols-2">
+          <CardContent class="min-h-0 flex-1 overflow-hidden">
+            <Tabs default-value="pipeline" class="flex h-full min-h-0 flex-col">
+              <TabsList class="grid w-full shrink-0 grid-cols-2">
                 <TabsTrigger value="pipeline">流程</TabsTrigger>
                 <TabsTrigger value="yaml">YAML</TabsTrigger>
               </TabsList>
-              <TabsContent value="pipeline" class="mt-4 space-y-3">
+              <TabsContent value="pipeline" class="mt-4 min-h-0 flex-1 overflow-hidden">
+                <ScrollArea class="h-full pr-3">
+                  <div class="space-y-3">
                 <div class="rounded-lg border bg-background p-4">
                   <div class="flex items-center gap-2 text-sm font-medium">
                     <CheckCircle2 class="size-4 text-emerald-600" />
@@ -239,11 +241,13 @@ function clearWorkspace() {
                     <p class="text-xs text-muted-foreground">场次</p>
                   </div>
                 </div>
+                  </div>
+                </ScrollArea>
               </TabsContent>
-              <TabsContent value="yaml" class="mt-4">
-                <div class="h-[470px] rounded-lg border bg-background p-4">
+              <TabsContent value="yaml" class="mt-4 min-h-0 flex-1">
+                <div class="flex h-full min-h-0 flex-col rounded-lg border bg-background p-4">
                   <p class="text-sm font-medium">YAML 剧本预览</p>
-                  <pre class="mt-4 overflow-auto whitespace-pre-wrap text-xs leading-6 text-muted-foreground">title: {{ title }}
+                  <pre class="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-xs leading-6 text-muted-foreground">title: {{ title }}
 chapters: {{ chapters.length }}
 characters: []
 scenes: []</pre>
