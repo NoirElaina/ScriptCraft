@@ -25,6 +25,7 @@ logs/
 *.log
 tmp/
 temp/
+config/
 
 # IDE / OS
 .idea/
