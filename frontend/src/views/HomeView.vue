@@ -5,22 +5,20 @@ import {
   BookOpen,
   CheckCircle2,
   FileText,
+  GitBranch,
   Loader2,
+  MapPin,
   Play,
   RotateCcw,
   Sparkles,
+  Users,
 } from '@lucide/vue'
 
 import { parseChapters, type Chapter } from '@/api/chapters'
+import { extractStoryElements, type StoryElementsResponse } from '@/api/story-elements'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -32,11 +30,16 @@ const title = ref('未命名小说')
 const novelText = ref('')
 const chapters = ref<Chapter[]>([])
 const selectedChapterId = ref<string>()
+const storyElements = ref<StoryElementsResponse>()
 const isParsing = ref(false)
+const isExtracting = ref(false)
 const errorMessage = ref('')
+const storyErrorMessage = ref('')
 
 const selectedChapter = computed(() => {
-  return chapters.value.find((chapter) => chapter.id === selectedChapterId.value) ?? chapters.value[0]
+  return (
+    chapters.value.find((chapter) => chapter.id === selectedChapterId.value) ?? chapters.value[0]
+  )
 })
 
 const chapterCoverageLabel = computed(() => {
@@ -44,17 +47,43 @@ const chapterCoverageLabel = computed(() => {
   return chapters.value.length >= 3 ? '符合 3 章要求' : '章节不足'
 })
 
+const yamlPreview = computed(() => {
+  const characterLines = storyElements.value?.characters.length
+    ? storyElements.value.characters.map(
+        (character) => `  - id: ${character.id}\n    name: ${character.name}`,
+      )
+    : ['  []']
+  const eventLines = storyElements.value?.events.length
+    ? storyElements.value.events.map(
+        (event) => `  - id: ${event.id}\n    summary: ${event.summary}`,
+      )
+    : ['  []']
+
+  return [
+    `title: ${title.value}`,
+    `chapters: ${chapters.value.length}`,
+    'characters:',
+    ...characterLines,
+    'events:',
+    ...eventLines,
+    'scenes: []',
+  ].join('\n')
+})
+
 async function handleParse() {
   errorMessage.value = ''
+  storyErrorMessage.value = ''
   isParsing.value = true
 
   try {
     const result = await parseChapters(title.value, novelText.value)
     title.value = result.title
     chapters.value = result.chapters
+    storyElements.value = undefined
     selectedChapterId.value = result.chapters[0]?.id
   } catch (error) {
     chapters.value = []
+    storyElements.value = undefined
     selectedChapterId.value = undefined
     errorMessage.value = error instanceof Error ? error.message : '章节解析失败'
   } finally {
@@ -62,18 +91,38 @@ async function handleParse() {
   }
 }
 
+async function handleExtractStoryElements() {
+  storyErrorMessage.value = ''
+  isExtracting.value = true
+
+  try {
+    storyElements.value = await extractStoryElements(title.value, chapters.value)
+  } catch (error) {
+    storyElements.value = undefined
+    storyErrorMessage.value = error instanceof Error ? error.message : '故事元素抽取失败'
+  } finally {
+    isExtracting.value = false
+  }
+}
+
 function clearWorkspace() {
   novelText.value = ''
   chapters.value = []
+  storyElements.value = undefined
   selectedChapterId.value = undefined
   errorMessage.value = ''
+  storyErrorMessage.value = ''
 }
 </script>
 
 <template>
   <main class="h-screen overflow-hidden bg-muted/30 text-foreground">
-    <section class="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-      <header class="shrink-0 flex flex-col gap-3 border-b bg-background/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
+    <section
+      class="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8"
+    >
+      <header
+        class="shrink-0 flex flex-col gap-3 border-b bg-background/80 pb-4 sm:flex-row sm:items-center sm:justify-between"
+      >
         <div class="space-y-1">
           <div class="flex items-center gap-2">
             <div class="flex size-9 items-center justify-center rounded-lg border bg-card">
@@ -117,7 +166,10 @@ function clearWorkspace() {
               />
             </div>
 
-            <div v-if="errorMessage" class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div
+              v-if="errorMessage"
+              class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+            >
               <AlertTriangle class="mt-0.5 size-4 shrink-0" />
               <span>{{ errorMessage }}</span>
             </div>
@@ -146,10 +198,14 @@ function clearWorkspace() {
                 </CardTitle>
                 <CardDescription>解析后的章节会作为后续角色抽取和剧本生成的输入。</CardDescription>
               </div>
-              <Badge :variant="chapters.length >= 3 ? 'default' : 'secondary'">{{ chapterCoverageLabel }}</Badge>
+              <Badge :variant="chapters.length >= 3 ? 'default' : 'secondary'">{{
+                chapterCoverageLabel
+              }}</Badge>
             </div>
           </CardHeader>
-          <CardContent class="grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)]">
+          <CardContent
+            class="grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)]"
+          >
             <div class="flex min-h-0 flex-col rounded-lg border bg-background">
               <div class="shrink-0 flex items-center justify-between border-b px-3 py-2">
                 <span class="text-sm font-medium">章节列表</span>
@@ -167,7 +223,9 @@ function clearWorkspace() {
                   @click="selectedChapterId = chapter.id"
                 >
                   <span class="text-sm font-medium">{{ chapter.heading }}</span>
-                  <span class="line-clamp-1 text-xs text-muted-foreground">{{ chapter.title }}</span>
+                  <span class="line-clamp-1 text-xs text-muted-foreground">{{
+                    chapter.title
+                  }}</span>
                 </button>
               </ScrollArea>
             </div>
@@ -176,9 +234,13 @@ function clearWorkspace() {
               <div class="shrink-0 flex items-center justify-between border-b px-4 py-3">
                 <div>
                   <p class="text-sm font-medium">{{ selectedChapter?.title ?? '章节详情' }}</p>
-                  <p class="text-xs text-muted-foreground">{{ selectedChapter?.id ?? '等待选择章节' }}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ selectedChapter?.id ?? '等待选择章节' }}
+                  </p>
                 </div>
-                <Badge v-if="selectedChapter" variant="secondary">第 {{ selectedChapter.index }} 章</Badge>
+                <Badge v-if="selectedChapter" variant="secondary"
+                  >第 {{ selectedChapter.index }} 章</Badge
+                >
               </div>
               <ScrollArea class="min-h-0 flex-1">
                 <div v-if="selectedChapter" class="space-y-4 p-4">
@@ -195,7 +257,7 @@ function clearWorkspace() {
         <Card class="flex min-h-0 flex-col overflow-hidden">
           <CardHeader class="shrink-0">
             <CardTitle class="text-base">剧本生成流程</CardTitle>
-            <CardDescription>当前先完成章节入口，后续继续接入 AI 结构化生成。</CardDescription>
+            <CardDescription>使用 AI 抽取角色、地点和关键剧情事件。</CardDescription>
           </CardHeader>
           <CardContent class="min-h-0 flex-1 overflow-hidden">
             <Tabs default-value="pipeline" class="flex h-full min-h-0 flex-col">
@@ -206,52 +268,133 @@ function clearWorkspace() {
               <TabsContent value="pipeline" class="mt-4 min-h-0 flex-1 overflow-hidden">
                 <ScrollArea class="h-full pr-3">
                   <div class="space-y-3">
-                <div class="rounded-lg border bg-background p-4">
-                  <div class="flex items-center gap-2 text-sm font-medium">
-                    <CheckCircle2 class="size-4 text-emerald-600" />
-                    章节解析
-                  </div>
-                  <p class="mt-2 text-sm text-muted-foreground">识别小说章节并校验是否满足 3 章以上要求。</p>
-                </div>
-                <div class="rounded-lg border bg-background p-4">
-                  <div class="flex items-center gap-2 text-sm font-medium">
-                    <span class="size-4 rounded-full border" />
-                    角色与事件抽取
-                  </div>
-                  <p class="mt-2 text-sm text-muted-foreground">后续从章节中抽取角色、地点、剧情事件和关系。</p>
-                </div>
-                <div class="rounded-lg border bg-background p-4">
-                  <div class="flex items-center gap-2 text-sm font-medium">
-                    <span class="size-4 rounded-full border" />
-                    YAML 剧本生成
-                  </div>
-                  <p class="mt-2 text-sm text-muted-foreground">将剧情事件改写为场次、动作、对白和旁白。</p>
-                </div>
-                <Separator />
-                <div class="grid grid-cols-3 gap-2 text-center">
-                  <div class="rounded-lg border bg-background p-3">
-                    <p class="text-lg font-semibold">{{ chapters.length }}</p>
-                    <p class="text-xs text-muted-foreground">章节</p>
-                  </div>
-                  <div class="rounded-lg border bg-background p-3">
-                    <p class="text-lg font-semibold">0</p>
-                    <p class="text-xs text-muted-foreground">角色</p>
-                  </div>
-                  <div class="rounded-lg border bg-background p-3">
-                    <p class="text-lg font-semibold">0</p>
-                    <p class="text-xs text-muted-foreground">场次</p>
-                  </div>
-                </div>
+                    <div class="rounded-lg border bg-background p-4">
+                      <div class="flex items-center gap-2 text-sm font-medium">
+                        <CheckCircle2 class="size-4 text-emerald-600" />
+                        章节解析
+                      </div>
+                      <p class="mt-2 text-sm text-muted-foreground">
+                        识别小说章节并校验是否满足 3 章以上要求。
+                      </p>
+                    </div>
+
+                    <div class="rounded-lg border bg-background p-4">
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <div class="flex items-center gap-2 text-sm font-medium">
+                            <CheckCircle2 v-if="storyElements" class="size-4 text-emerald-600" />
+                            <span v-else class="size-4 rounded-full border" />
+                            AI 故事元素抽取
+                          </div>
+                          <p class="mt-2 text-sm text-muted-foreground">
+                            调用已配置的大模型，从章节中抽取角色、地点和剧情事件。
+                          </p>
+                        </div>
+                        <Button
+                          :disabled="isExtracting || chapters.length < 3"
+                          class="shrink-0"
+                          @click="handleExtractStoryElements"
+                        >
+                          <Loader2 v-if="isExtracting" class="size-4 animate-spin" />
+                          <Sparkles v-else class="size-4" />
+                          抽取
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="storyErrorMessage"
+                      class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                    >
+                      <AlertTriangle class="mt-0.5 size-4 shrink-0" />
+                      <span>{{ storyErrorMessage }}</span>
+                    </div>
+
+                    <div v-if="storyElements" class="space-y-3">
+                      <div class="rounded-lg border bg-background p-4">
+                        <div class="flex items-center gap-2 text-sm font-medium">
+                          <Users class="size-4" />
+                          角色
+                        </div>
+                        <div class="mt-3 space-y-2">
+                          <div
+                            v-for="character in storyElements.characters"
+                            :key="character.id"
+                            class="rounded-md bg-muted/60 p-3"
+                          >
+                            <p class="text-sm font-medium">{{ character.name }}</p>
+                            <p class="mt-1 text-xs text-muted-foreground">
+                              {{ character.description }}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="rounded-lg border bg-background p-4">
+                        <div class="flex items-center gap-2 text-sm font-medium">
+                          <MapPin class="size-4" />
+                          地点
+                        </div>
+                        <div class="mt-3 space-y-2">
+                          <div
+                            v-for="location in storyElements.locations"
+                            :key="location.id"
+                            class="rounded-md bg-muted/60 p-3"
+                          >
+                            <p class="text-sm font-medium">{{ location.name }}</p>
+                            <p class="mt-1 text-xs text-muted-foreground">
+                              {{ location.description }}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="rounded-lg border bg-background p-4">
+                        <div class="flex items-center gap-2 text-sm font-medium">
+                          <GitBranch class="size-4" />
+                          事件
+                        </div>
+                        <div class="mt-3 space-y-2">
+                          <div
+                            v-for="event in storyElements.events"
+                            :key="event.id"
+                            class="rounded-md bg-muted/60 p-3"
+                          >
+                            <p class="text-sm font-medium">{{ event.source_chapter }}</p>
+                            <p class="mt-1 text-xs text-muted-foreground">{{ event.summary }}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div class="grid grid-cols-3 gap-2 text-center">
+                      <div class="rounded-lg border bg-background p-3">
+                        <p class="text-lg font-semibold">{{ chapters.length }}</p>
+                        <p class="text-xs text-muted-foreground">章节</p>
+                      </div>
+                      <div class="rounded-lg border bg-background p-3">
+                        <p class="text-lg font-semibold">
+                          {{ storyElements?.characters.length ?? 0 }}
+                        </p>
+                        <p class="text-xs text-muted-foreground">角色</p>
+                      </div>
+                      <div class="rounded-lg border bg-background p-3">
+                        <p class="text-lg font-semibold">{{ storyElements?.events.length ?? 0 }}</p>
+                        <p class="text-xs text-muted-foreground">事件</p>
+                      </div>
+                    </div>
                   </div>
                 </ScrollArea>
               </TabsContent>
               <TabsContent value="yaml" class="mt-4 min-h-0 flex-1">
                 <div class="flex h-full min-h-0 flex-col rounded-lg border bg-background p-4">
                   <p class="text-sm font-medium">YAML 剧本预览</p>
-                  <pre class="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-xs leading-6 text-muted-foreground">title: {{ title }}
-chapters: {{ chapters.length }}
-characters: []
-scenes: []</pre>
+                  <pre
+                    class="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-xs leading-6 text-muted-foreground"
+                    >{{ yamlPreview }}</pre
+                  >
                 </div>
               </TabsContent>
             </Tabs>
