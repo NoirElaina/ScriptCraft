@@ -1,3 +1,3 @@
-from .session import create_database_tables, get_session
+from .session import get_session
 
-__all__ = ["create_database_tables", "get_session"]
+__all__ = ["get_session"]
