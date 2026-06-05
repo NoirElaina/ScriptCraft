@@ -1,20 +1,68 @@
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, TypedDict
 
-from llm import LLMClient, LLMResponseError
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+
+from llm.base import LLMResponseError, parse_json_content
+
+
+class StoryElementState(TypedDict, total=False):
+    title: str
+    chapters: Sequence[Mapping[str, Any]]
+    messages: list[BaseMessage]
+    raw_payload: dict[str, Any]
+    result: dict[str, Any]
 
 
 class StoryElementExtractor:
-    def __init__(self, client: LLMClient) -> None:
-        self.client = client
+    def __init__(self, model: BaseChatModel) -> None:
+        self.graph = build_story_element_graph(model)
 
     def extract(self, title: str, chapters: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         normalized_title = title.strip() or "未命名小说"
-        payload = self.client.complete_json(build_story_element_messages(normalized_title, chapters))
-        return normalize_story_elements(normalized_title, payload)
+        state = self.graph.invoke({"title": normalized_title, "chapters": chapters})
+        return state["result"]
 
 
-def build_story_element_messages(title: str, chapters: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+def build_story_element_graph(model: BaseChatModel):
+    graph = StateGraph(StoryElementState)
+    graph.add_node("build_prompt", build_prompt_node)
+    graph.add_node("call_model", call_model_node(model))
+    graph.add_node("normalize", normalize_node)
+    graph.add_edge(START, "build_prompt")
+    graph.add_edge("build_prompt", "call_model")
+    graph.add_edge("call_model", "normalize")
+    graph.add_edge("normalize", END)
+    return graph.compile()
+
+
+def build_prompt_node(state: StoryElementState) -> StoryElementState:
+    return {
+        "messages": build_story_element_messages(
+            title=state["title"],
+            chapters=state["chapters"],
+        )
+    }
+
+
+def call_model_node(model: BaseChatModel):
+    def node(state: StoryElementState) -> StoryElementState:
+        try:
+            response = model.invoke(state["messages"])
+        except Exception as exc:
+            raise LLMResponseError(f"AI 服务调用失败：{exc}") from exc
+        return {"raw_payload": parse_json_content(response.content)}
+
+    return node
+
+
+def normalize_node(state: StoryElementState) -> StoryElementState:
+    return {"result": normalize_story_elements(state["title"], state["raw_payload"])}
+
+
+def build_story_element_messages(title: str, chapters: Sequence[Mapping[str, Any]]) -> list[BaseMessage]:
     chapter_blocks = []
     for chapter in chapters:
         chapter_blocks.append(
@@ -28,16 +76,14 @@ def build_story_element_messages(title: str, chapters: Sequence[Mapping[str, Any
         )
 
     return [
-        {
-            "role": "system",
-            "content": (
+        SystemMessage(
+            content=(
                 "你是专业的小说改编剧本策划。请从小说章节中抽取角色、地点和关键剧情事件。"
                 "只返回 JSON，不要返回 Markdown。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
+            )
+        ),
+        HumanMessage(
+            content=(
                 f"作品名：{title}\n\n"
                 "请返回如下 JSON：\n"
                 "{\n"
@@ -47,8 +93,8 @@ def build_story_element_messages(title: str, chapters: Sequence[Mapping[str, Any
                 "}\n\n"
                 "章节内容：\n"
                 + "\n\n---\n\n".join(chapter_blocks)
-            ),
-        },
+            )
+        ),
     ]
 
 
