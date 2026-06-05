@@ -26,7 +26,7 @@ from .schemas import (
     ScriptVersionResponse,
     StoryElementsSnapshotResponse,
 )
-from .service import ProjectNotFoundError, get_project
+from .service import ProjectNotFoundError, assign_owner_if_needed, get_project
 
 
 ModelFactory = Callable[[], BaseChatModel]
@@ -36,8 +36,14 @@ class ProjectPipelineError(RuntimeError):
     pass
 
 
-def parse_and_save_chapters(session: Session, project_id: int, source_text: str) -> ProjectChaptersResponse:
-    project = get_project(session, project_id)
+def parse_and_save_chapters(
+    session: Session,
+    project_id: int,
+    owner_id: int,
+    source_text: str,
+) -> ProjectChaptersResponse:
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
 
     try:
         parsed_chapters = ChapterParser().parse(source_text)
@@ -74,9 +80,11 @@ def parse_and_save_chapters(session: Session, project_id: int, source_text: str)
 def extract_and_save_story_elements(
     session: Session,
     project_id: int,
+    owner_id: int,
     model_factory: ModelFactory = create_chat_model_from_env,
 ) -> ProjectStoryElementsResponse:
-    project = get_project(session, project_id)
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
     chapters = _require_chapters(session, project)
     input_payload = {"title": project.title, "chapters": [_chapter_payload(chapter) for chapter in chapters]}
     ai_run = _create_ai_run(session, project.id, "story_elements", input_payload)
@@ -114,9 +122,11 @@ def extract_and_save_story_elements(
 def generate_and_save_script_yaml(
     session: Session,
     project_id: int,
+    owner_id: int,
     model_factory: ModelFactory = create_chat_model_from_env,
 ) -> ProjectScriptYamlResponse:
-    project = get_project(session, project_id)
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
     chapters = _require_chapters(session, project)
     story_element = _require_latest_story_elements(session, project)
     characters = story_element.characters
@@ -167,8 +177,8 @@ def generate_and_save_script_yaml(
     )
 
 
-def get_project_workspace(session: Session, project_id: int) -> ProjectWorkspaceResponse:
-    project = get_project(session, project_id)
+def get_project_workspace(session: Session, project_id: int, owner_id: int) -> ProjectWorkspaceResponse:
+    project = get_project(session, project_id, owner_id)
     chapters = [_chapter_response(chapter) for chapter in _list_chapters(session, project.id)]
     story_element = _latest_story_elements(session, project.id)
     script_version = _latest_script_version(session, project.id)

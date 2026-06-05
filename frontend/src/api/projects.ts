@@ -1,4 +1,5 @@
 import type { Chapter } from './chapters'
+import { requestJson } from './client'
 import type { StoryCharacter, StoryEvent, StoryLocation } from './story-elements'
 
 export interface Project {
@@ -137,26 +138,4 @@ export async function generateProjectScriptYaml(
   projectId: number,
 ): Promise<ProjectScriptYamlResponse> {
   return requestJson(`/api/projects/${projectId}/script-yaml`, { method: 'POST' })
-}
-
-async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  })
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  const payload = await response.json()
-
-  if (!response.ok) {
-    throw new Error(payload.detail ?? '请求失败')
-  }
-
-  return payload
 }
