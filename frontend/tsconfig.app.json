@@ -5,6 +5,8 @@
   "compilerOptions": {
     // Extra safety for array and object lookups, but may have false positives.
     "noUncheckedIndexedAccess": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
 
     // Path mapping for cleaner imports.
     "paths": {
