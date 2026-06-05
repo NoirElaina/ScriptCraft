@@ -1,14 +1,25 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
 
 from chapter_parser import ChapterParseError, ChapterParser
+from database import create_database_tables
 from llm import LLMConfigError, LLMResponseError, create_chat_model_from_env
+from projects.router import router as projects_router
 from script_yaml import ScriptYamlGenerator
 from story_elements import StoryElementExtractor
 
 
-app = FastAPI(title="ScriptCraft API")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    create_database_tables()
+    yield
+
+
+app = FastAPI(title="ScriptCraft API", lifespan=lifespan)
+app.include_router(projects_router)
 
 
 class NovelChapterRequest(BaseModel):
