@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Sparkles } from '@lucide/vue'
+import { Loader2, LogOut, Sparkles } from '@lucide/vue'
 
+import {
+  getCurrentUser,
+  logout,
+  type AuthTokenResponse,
+  type AuthUser,
+} from '@/api/auth'
+import { getAuthToken } from '@/api/client'
 import {
   createProject,
   deleteProject,
@@ -16,14 +23,17 @@ import {
   type ProjectWorkspaceResponse,
   type StoryElementsSnapshot,
 } from '@/api/projects'
+import AuthPanel from '@/components/auth/AuthPanel.vue'
 import ChapterPanel from '@/components/workspace/ChapterPanel.vue'
 import EmptyProjectState from '@/components/workspace/EmptyProjectState.vue'
 import NovelEditorPanel from '@/components/workspace/NovelEditorPanel.vue'
 import PipelinePanel from '@/components/workspace/PipelinePanel.vue'
 import ProjectSwitcher from '@/components/workspace/ProjectSwitcher.vue'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { normalizeNovelText } from '@/lib/novel-text'
 
+const currentUser = ref<AuthUser>()
 const projects = ref<ProjectListItem[]>([])
 const workspace = ref<ProjectWorkspaceResponse>()
 const projectTitle = ref('未命名小说')
@@ -41,6 +51,8 @@ const isParsing = ref(false)
 const isExtracting = ref(false)
 const isGeneratingYaml = ref(false)
 const isDeletingProject = ref(false)
+const isCheckingAuth = ref(true)
+const isLoggingOut = ref(false)
 
 const projectErrorMessage = ref('')
 const workspaceErrorMessage = ref('')
@@ -69,10 +81,47 @@ const editorErrorMessage = computed(() => {
 })
 
 onMounted(() => {
-  void loadProjectList()
+  void restoreAuthSession()
 })
 
+async function restoreAuthSession() {
+  if (!getAuthToken()) {
+    isCheckingAuth.value = false
+    return
+  }
+
+  try {
+    currentUser.value = await getCurrentUser()
+    await loadProjectList()
+  } catch {
+    resetWorkspace()
+  } finally {
+    isCheckingAuth.value = false
+  }
+}
+
+async function handleAuthenticated(result: AuthTokenResponse) {
+  currentUser.value = result.user
+  resetWorkspace()
+  await loadProjectList()
+}
+
+async function handleLogout() {
+  isLoggingOut.value = true
+
+  try {
+    await logout()
+  } finally {
+    currentUser.value = undefined
+    resetWorkspace()
+    projects.value = []
+    isLoggingOut.value = false
+  }
+}
+
 async function loadProjectList() {
+  if (!currentUser.value) return
+
   projectErrorMessage.value = ''
   isLoadingProjects.value = true
 
@@ -81,6 +130,10 @@ async function loadProjectList() {
     projects.value = result.projects
   } catch (error) {
     projectErrorMessage.value = error instanceof Error ? error.message : '项目列表加载失败'
+    if (projectErrorMessage.value.includes('登录')) {
+      currentUser.value = undefined
+      resetWorkspace()
+    }
   } finally {
     isLoadingProjects.value = false
   }
@@ -250,6 +303,19 @@ function tidyDraftText(): string {
   novelText.value = sourceText
   return sourceText
 }
+
+function resetWorkspace() {
+  workspace.value = undefined
+  projectTitle.value = '未命名小说'
+  newProjectTitle.value = ''
+  novelText.value = ''
+  selectedChapterId.value = undefined
+  activeFlowTab.value = 'pipeline'
+  activeYamlTab.value = 'preview'
+  projectErrorMessage.value = ''
+  workspaceErrorMessage.value = ''
+  pipelineErrorMessage.value = ''
+}
 </script>
 
 <template>
@@ -269,7 +335,7 @@ function tidyDraftText(): string {
             <p class="text-sm text-muted-foreground">AI 小说转剧本工作台</p>
           </div>
         </div>
-        <div class="flex flex-col items-stretch gap-2 sm:items-end">
+        <div v-if="currentUser" class="flex flex-col items-stretch gap-2 sm:items-end">
           <ProjectSwitcher
             v-model:new-project-title="newProjectTitle"
             :projects="projects"
@@ -285,16 +351,30 @@ function tidyDraftText(): string {
             @delete-project="handleDeleteProject"
           />
           <div class="flex flex-wrap justify-end gap-2">
+            <Badge variant="outline">{{ currentUser.username }}</Badge>
             <Badge variant="secondary">{{ projects.length }} 个项目</Badge>
             <Badge variant="outline">{{ chapters.length }} 章</Badge>
             <Badge variant="outline">{{ storyElementsCountLabel }}</Badge>
             <Badge variant="outline">{{ scriptVersionName ?? '无剧本版本' }}</Badge>
+            <Button size="sm" variant="outline" :disabled="isLoggingOut" @click="handleLogout">
+              <Loader2 v-if="isLoggingOut" class="size-3.5 animate-spin" />
+              <LogOut v-else class="size-3.5" />
+              退出
+            </Button>
           </div>
         </div>
       </header>
 
       <div class="min-h-0 flex-1">
-        <EmptyProjectState v-if="!currentProject" />
+        <div v-if="isCheckingAuth" class="flex h-full items-center justify-center">
+          <Loader2 class="size-6 animate-spin text-muted-foreground" />
+        </div>
+
+        <div v-else-if="!currentUser" class="flex h-full items-center justify-center">
+          <AuthPanel @authenticated="handleAuthenticated" />
+        </div>
+
+        <EmptyProjectState v-else-if="!currentProject" />
 
         <div v-else class="grid h-full min-h-0 gap-4 xl:grid-cols-[420px_minmax(0,1fr)_420px]">
           <NovelEditorPanel

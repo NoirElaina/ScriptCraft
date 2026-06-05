@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from models.chapter import Chapter
@@ -11,7 +11,7 @@ class ProjectNotFoundError(RuntimeError):
     pass
 
 
-def list_projects(session: Session) -> list[ProjectListItemResponse]:
+def list_projects(session: Session, owner_id: int) -> list[ProjectListItemResponse]:
     chapter_count = func.count(func.distinct(Chapter.id))
     script_version_count = func.count(func.distinct(ScriptVersion.id))
 
@@ -19,6 +19,7 @@ def list_projects(session: Session) -> list[ProjectListItemResponse]:
         select(Project, chapter_count, script_version_count)
         .outerjoin(Chapter, Chapter.project_id == Project.id)
         .outerjoin(ScriptVersion, ScriptVersion.project_id == Project.id)
+        .where(or_(Project.owner_id == owner_id, Project.owner_id.is_(None)))
         .group_by(Project.id)
         .order_by(Project.updated_at.desc(), Project.id.desc())
     ).all()
@@ -34,8 +35,9 @@ def list_projects(session: Session) -> list[ProjectListItemResponse]:
     ]
 
 
-def create_project(session: Session, request: ProjectCreateRequest) -> Project:
+def create_project(session: Session, request: ProjectCreateRequest, owner_id: int) -> Project:
     project = Project(
+        owner_id=owner_id,
         title=request.title.strip(),
         description=request.description.strip(),
         source_text=request.source_text,
@@ -46,15 +48,16 @@ def create_project(session: Session, request: ProjectCreateRequest) -> Project:
     return project
 
 
-def get_project(session: Session, project_id: int) -> Project:
+def get_project(session: Session, project_id: int, owner_id: int) -> Project:
     project = session.get(Project, project_id)
-    if project is None:
+    if project is None or (project.owner_id is not None and project.owner_id != owner_id):
         raise ProjectNotFoundError(f"项目不存在：{project_id}")
     return project
 
 
-def update_project(session: Session, project_id: int, request: ProjectUpdateRequest) -> Project:
-    project = get_project(session, project_id)
+def update_project(session: Session, project_id: int, request: ProjectUpdateRequest, owner_id: int) -> Project:
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
     update_values = request.model_dump(exclude_unset=True)
 
     for field, value in update_values.items():
@@ -67,7 +70,12 @@ def update_project(session: Session, project_id: int, request: ProjectUpdateRequ
     return project
 
 
-def delete_project(session: Session, project_id: int) -> None:
-    project = get_project(session, project_id)
+def delete_project(session: Session, project_id: int, owner_id: int) -> None:
+    project = get_project(session, project_id, owner_id)
     session.delete(project)
     session.commit()
+
+
+def assign_owner_if_needed(project: Project, owner_id: int) -> None:
+    if project.owner_id is None:
+        project.owner_id = owner_id

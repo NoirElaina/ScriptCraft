@@ -16,3 +16,4 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     projects = relationship("Project", back_populates="owner")
+    auth_sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
