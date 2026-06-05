@@ -3,6 +3,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+import yaml
+
 
 class LLMConfigError(RuntimeError):
     pass
@@ -37,6 +39,34 @@ def parse_json_content(content: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise LLMResponseError("AI 响应 JSON 顶层必须是对象")
     return payload
+
+
+def parse_yaml_content(content: Any) -> tuple[dict[str, Any], str]:
+    text = _message_content_to_text(content).strip()
+    if not text:
+        raise LLMResponseError("AI 响应内容为空")
+
+    fence_match = re.search(r"```(?:yaml|yml)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    try:
+        payload = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise LLMResponseError("AI 响应不是合法 YAML") from exc
+    if not isinstance(payload, dict):
+        raise LLMResponseError("AI 响应 YAML 顶层必须是对象")
+
+    normalized = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    return payload, normalized
+
+
+def _message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_text_from_content_part(part) for part in content)
+    return ""
 
 
 def _text_from_content_part(part: Any) -> str:
