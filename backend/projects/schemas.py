@@ -45,3 +45,101 @@ class ProjectListItemResponse(BaseModel):
 
 class ProjectListResponse(BaseModel):
     projects: list[ProjectListItemResponse]
+
+
+class ChapterItemResponse(BaseModel):
+    id: str
+    index: int
+    heading: str
+    title: str
+    content: str
+
+
+class ProjectChaptersRequest(BaseModel):
+    source_text: str = Field(min_length=1)
+
+
+class ProjectChaptersResponse(BaseModel):
+    project_id: int
+    title: str
+    chapter_count: int
+    chapters: list[ChapterItemResponse]
+
+
+class CharacterItemResponse(BaseModel):
+    id: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    role: str
+    description: str
+    motivation: str = ""
+
+
+class LocationItemResponse(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+
+
+class EventItemResponse(BaseModel):
+    id: str
+    source_chapter: str
+    summary: str
+    involved_characters: list[str] = Field(default_factory=list)
+
+
+class StoryElementsSnapshotResponse(BaseModel):
+    id: int
+    project_id: int
+    characters: list[CharacterItemResponse]
+    locations: list[LocationItemResponse]
+    events: list[EventItemResponse]
+    created_at: datetime
+
+
+class ProjectStoryElementsResponse(BaseModel):
+    project_id: int
+    title: str
+    ai_run_id: int
+    story_elements: StoryElementsSnapshotResponse
+
+
+class ScriptVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    version_name: str
+    schema_version: str
+    yaml_content: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectScriptYamlResponse(BaseModel):
+    project_id: int
+    title: str
+    ai_run_id: int
+    script_version: ScriptVersionResponse
+
+
+class AIRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int | None
+    task_type: str
+    provider: str
+    model: str
+    status: str
+    error_message: str
+    duration_ms: int | None
+    created_at: datetime
+
+
+class ProjectWorkspaceResponse(BaseModel):
+    project: ProjectResponse
+    chapters: list[ChapterItemResponse]
+    story_elements: StoryElementsSnapshotResponse | None
+    script_version: ScriptVersionResponse | None
+    ai_runs: list[AIRunResponse]
