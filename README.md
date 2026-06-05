@@ -36,7 +36,7 @@ uv run python main.py
 章节解析接口：
 
 ```text
-POST /api/chapters/parse
+POST /api/novels/chapters
 ```
 
 ## 当前进度

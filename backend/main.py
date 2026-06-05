@@ -8,7 +8,7 @@ from chapter_parser import ChapterParseError, ChapterParser
 app = FastAPI(title="ScriptCraft API")
 
 
-class ChapterParseRequest(BaseModel):
+class NovelChapterRequest(BaseModel):
     text: str = Field(min_length=1, description="包含 3 个章节以上的小说文本")
 
 
@@ -20,7 +20,7 @@ class ChapterResponse(BaseModel):
     content: str
 
 
-class ChapterParseResponse(BaseModel):
+class NovelChaptersResponse(BaseModel):
     chapter_count: int
     chapters: list[ChapterResponse]
 
@@ -30,14 +30,14 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "scriptcraft-backend"}
 
 
-@app.post("/api/chapters/parse")
-def parse_chapters(request: ChapterParseRequest) -> ChapterParseResponse:
+@app.post("/api/novels/chapters")
+def create_novel_chapters(request: NovelChapterRequest) -> NovelChaptersResponse:
     try:
         chapters = ChapterParser().parse(request.text)
     except ChapterParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return ChapterParseResponse(
+    return NovelChaptersResponse(
         chapter_count=len(chapters),
         chapters=[ChapterResponse(**chapter.__dict__) for chapter in chapters],
     )
