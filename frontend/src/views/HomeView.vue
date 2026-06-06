@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Loader2, Sparkles } from '@lucide/vue'
 
 import {
@@ -18,11 +18,10 @@ import {
   listProjects,
   parseProjectChapters,
   saveProjectScriptVersion,
-  streamProjectChapterAnalyses,
+  startProjectChapterAnalysisJob,
   updateProject,
   type AIRun,
   type ChapterAnalysis,
-  type ChapterAnalysisStreamEvent,
   type ProjectListItem,
   type ProjectWorkspaceResponse,
   type StoryElementsSnapshot,
@@ -44,6 +43,9 @@ interface ChapterAnalysisLogItem {
   message: string
   createdAt: string
 }
+
+const ACTIVE_PROJECT_STORAGE_PREFIX = 'scriptcraft.activeProjectId'
+const WORKSPACE_POLL_INTERVAL_MS = 1800
 
 const currentUser = ref<AuthUser>()
 const projects = ref<ProjectListItem[]>([])
@@ -96,14 +98,39 @@ const chapterAnalysisLabel = computed(() => {
   if (chapters.value.length === 0) return '无章节分析'
   return `章节分析 ${chapterAnalyses.value.length}/${chapters.value.length}`
 })
+const isBackendAnalyzingChapters = computed(() => {
+  return (
+    currentProject.value?.status === 'chapter_analysis_running' ||
+    aiRuns.value.some((run) => run.task_type === 'chapter_analysis' && run.status === 'running')
+  )
+})
+const isChapterAnalysisBusy = computed(() => isAnalyzingChapters.value || isBackendAnalyzingChapters.value)
 
 const editorErrorMessage = computed(() => {
   return workspaceErrorMessage.value || pipelineErrorMessage.value
 })
 
+let workspacePollTimer: number | undefined
+const isPollingWorkspace = ref(false)
+
 onMounted(() => {
   void restoreAuthSession()
 })
+
+onBeforeUnmount(() => {
+  stopWorkspacePolling()
+})
+
+watch(
+  [() => currentProject.value?.id, isBackendAnalyzingChapters],
+  ([projectId, isRunning]) => {
+    stopWorkspacePolling()
+    if (projectId && isRunning) {
+      startWorkspacePolling(projectId)
+    }
+  },
+  { immediate: true },
+)
 
 async function restoreAuthSession() {
   if (!getAuthToken()) {
@@ -113,7 +140,8 @@ async function restoreAuthSession() {
 
   try {
     currentUser.value = await getCurrentUser()
-    await loadProjectList()
+    const loadedProjects = await loadProjectList()
+    await restoreActiveProject(loadedProjects)
   } catch {
     resetWorkspace()
   } finally {
@@ -124,7 +152,8 @@ async function restoreAuthSession() {
 async function handleAuthenticated(result: AuthTokenResponse) {
   currentUser.value = result.user
   resetWorkspace()
-  await loadProjectList()
+  const loadedProjects = await loadProjectList()
+  await restoreActiveProject(loadedProjects)
 }
 
 async function handleLogout() {
@@ -133,6 +162,7 @@ async function handleLogout() {
   try {
     await logout()
   } finally {
+    forgetActiveProject()
     currentUser.value = undefined
     resetWorkspace()
     projects.value = []
@@ -144,8 +174,8 @@ function showAiRunHistory() {
   activeFlowTab.value = 'pipeline'
 }
 
-async function loadProjectList() {
-  if (!currentUser.value) return
+async function loadProjectList(): Promise<ProjectListItem[]> {
+  if (!currentUser.value) return []
 
   projectErrorMessage.value = ''
   isLoadingProjects.value = true
@@ -153,12 +183,14 @@ async function loadProjectList() {
   try {
     const result = await listProjects()
     projects.value = result.projects
+    return result.projects
   } catch (error) {
     projectErrorMessage.value = error instanceof Error ? error.message : '项目列表加载失败'
     if (projectErrorMessage.value.includes('登录')) {
       currentUser.value = undefined
       resetWorkspace()
     }
+    return []
   } finally {
     isLoadingProjects.value = false
   }
@@ -188,6 +220,7 @@ async function openProject(projectId: number) {
   try {
     const result = await getProjectWorkspace(projectId)
     applyWorkspace(result)
+    rememberActiveProject(result.project.id)
   } catch (error) {
     workspaceErrorMessage.value = error instanceof Error ? error.message : '项目打开失败'
   } finally {
@@ -201,6 +234,38 @@ async function refreshWorkspace() {
 
   await openProject(projectId)
   await loadProjectList()
+}
+
+async function refreshWorkspaceSnapshot(projectId: number) {
+  if (!currentUser.value || isPollingWorkspace.value) return
+
+  isPollingWorkspace.value = true
+  try {
+    const result = await getProjectWorkspace(projectId)
+    if (currentProject.value?.id === projectId || !currentProject.value) {
+      applyWorkspace(result, { preserveSelectedChapter: true })
+      rememberActiveProject(result.project.id)
+    }
+    await loadProjectList()
+  } catch (error) {
+    workspaceErrorMessage.value = error instanceof Error ? error.message : '工作台状态同步失败'
+  } finally {
+    isPollingWorkspace.value = false
+  }
+}
+
+function startWorkspacePolling(projectId: number) {
+  stopWorkspacePolling()
+  workspacePollTimer = window.setInterval(() => {
+    void refreshWorkspaceSnapshot(projectId)
+  }, WORKSPACE_POLL_INTERVAL_MS)
+}
+
+function stopWorkspacePolling() {
+  if (!workspacePollTimer) return
+
+  window.clearInterval(workspacePollTimer)
+  workspacePollTimer = undefined
 }
 
 async function handleSaveProject() {
@@ -235,6 +300,7 @@ async function handleDeleteProject(project: ProjectListItem) {
   try {
     await deleteProject(project.id)
     if (currentProject.value?.id === project.id) {
+      forgetActiveProject(project.id)
       workspace.value = undefined
       projectTitle.value = '未命名小说'
       novelText.value = ''
@@ -282,10 +348,10 @@ async function handleAnalyzeProjectChapters() {
   activeFlowTab.value = 'pipeline'
 
   try {
-    await streamProjectChapterAnalyses(project.id, handleChapterAnalysisStreamEvent)
-    if (currentProject.value?.id === project.id) {
-      await refreshWorkspace()
-    }
+    const result = await startProjectChapterAnalysisJob(project.id)
+    appendChapterAnalysisLog('running', `章节分析任务已启动：${result.ai_run.status}`)
+    await refreshWorkspaceSnapshot(project.id)
+    startWorkspacePolling(project.id)
   } catch (error) {
     pipelineErrorMessage.value = error instanceof Error ? error.message : '章节分析失败'
   } finally {
@@ -357,65 +423,73 @@ async function handleSaveScriptYaml(yamlContent: string, versionName: string) {
   }
 }
 
-function applyWorkspace(result: ProjectWorkspaceResponse) {
+function applyWorkspace(
+  result: ProjectWorkspaceResponse,
+  options: { preserveSelectedChapter?: boolean } = {},
+) {
+  const previousSelectedChapterId = selectedChapterId.value
   workspace.value = result
   projectTitle.value = result.project.title
   novelText.value = normalizeNovelText(result.project.source_text)
-  selectedChapterId.value = result.chapters[0]?.id
+  selectedChapterId.value =
+    options.preserveSelectedChapter &&
+    previousSelectedChapterId &&
+    result.chapters.some((chapter) => chapter.id === previousSelectedChapterId)
+      ? previousSelectedChapterId
+      : result.chapters[0]?.id
+
+  syncChapterAnalysisLogs(result)
 }
 
-function handleChapterAnalysisStreamEvent(event: ChapterAnalysisStreamEvent) {
-  if (event.type === 'started') {
-    if (workspace.value?.project.id === event.project_id) {
-      workspace.value = { ...workspace.value, chapter_analyses: [] }
+function syncChapterAnalysisLogs(result: ProjectWorkspaceResponse) {
+  const latestChapterAnalysisRun = result.ai_runs.find((run) => run.task_type === 'chapter_analysis')
+  if (!latestChapterAnalysisRun) return
+
+  const isRunning =
+    result.project.status === 'chapter_analysis_running' || latestChapterAnalysisRun.status === 'running'
+  if (!isRunning) {
+    if (latestChapterAnalysisRun.status === 'succeeded') {
+      chapterAnalysisLogs.value = [
+        ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
+        {
+          id: `run-${latestChapterAnalysisRun.id}-succeeded`,
+          status: 'succeeded',
+          message: '全部章节分析完成',
+          createdAt: latestChapterAnalysisRun.created_at,
+        },
+      ]
     }
-    appendChapterAnalysisLog('running', event.message)
+    if (latestChapterAnalysisRun.status === 'failed') {
+      chapterAnalysisLogs.value = [
+        ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
+        {
+          id: `run-${latestChapterAnalysisRun.id}-failed`,
+          status: 'failed',
+          message: latestChapterAnalysisRun.error_message || '章节分析失败',
+          createdAt: latestChapterAnalysisRun.created_at,
+        },
+      ]
+    }
     return
   }
 
-  if (event.type === 'chapter_started') {
-    selectedChapterId.value = event.chapter.id
-    appendChapterAnalysisLog('running', event.message)
-    return
-  }
-
-  if (event.type === 'chapter_completed') {
-    applyChapterAnalysis(event.chapter_analysis)
-    selectedChapterId.value = event.chapter_analysis.chapter_key
-    appendChapterAnalysisLog('succeeded', event.message)
-    return
-  }
-
-  if (event.type === 'completed') {
-    applyChapterAnalyses(event.project_id, event.chapter_analyses)
-    appendChapterAnalysisLog('succeeded', event.message)
-    return
-  }
-
-  pipelineErrorMessage.value = event.message
-  appendChapterAnalysisLog('failed', event.message)
+  chapterAnalysisLogs.value = [
+    ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
+    {
+      id: `run-${latestChapterAnalysisRun.id}-running-${result.chapter_analyses.length}`,
+      status: 'running',
+      message: `章节分析进行中：已完成 ${result.chapter_analyses.length}/${result.chapters.length} 章`,
+      createdAt: latestChapterAnalysisRun.created_at,
+    },
+  ]
 }
 
-function applyChapterAnalysis(analysis: ChapterAnalysis) {
-  if (!workspace.value || workspace.value.project.id !== analysis.project_id) return
-
-  const chapterAnalyses = [...workspace.value.chapter_analyses]
-  const index = chapterAnalyses.findIndex((item) => item.chapter_id === analysis.chapter_id)
-  if (index >= 0) {
-    chapterAnalyses[index] = analysis
-  } else {
-    chapterAnalyses.push(analysis)
-  }
-  chapterAnalyses.sort((left, right) => left.chapter_index - right.chapter_index)
-  workspace.value = { ...workspace.value, chapter_analyses: chapterAnalyses }
-}
-
-function applyChapterAnalyses(projectId: number, analyses: ChapterAnalysis[]) {
-  if (!workspace.value || workspace.value.project.id !== projectId) return
-
-  workspace.value = {
-    ...workspace.value,
-    chapter_analyses: [...analyses].sort((left, right) => left.chapter_index - right.chapter_index),
+function chapterAnalysisLogFromRecord(analysis: ChapterAnalysis): ChapterAnalysisLogItem {
+  return {
+    id: `analysis-${analysis.id}`,
+    status: 'succeeded',
+    message: `第 ${analysis.chapter_index} 章分析完成`,
+    createdAt: analysis.updated_at,
   }
 }
 
@@ -454,6 +528,56 @@ function resetWorkspace() {
   projectErrorMessage.value = ''
   workspaceErrorMessage.value = ''
   pipelineErrorMessage.value = ''
+}
+
+async function restoreActiveProject(projectList: ProjectListItem[]) {
+  if (!currentUser.value || projectList.length === 0 || currentProject.value) return
+
+  const projectId = readRememberedProjectId()
+  if (projectId && projectList.some((project) => project.id === projectId)) {
+    await openProject(projectId)
+    return
+  }
+
+  if (projectId) {
+    forgetActiveProject(projectId)
+  }
+
+  if (projectList.length === 1) {
+    const onlyProject = projectList[0]
+    if (onlyProject) {
+      await openProject(onlyProject.id)
+    }
+  }
+}
+
+function activeProjectStorageKey(): string | undefined {
+  return currentUser.value ? `${ACTIVE_PROJECT_STORAGE_PREFIX}.${currentUser.value.id}` : undefined
+}
+
+function readRememberedProjectId(): number | undefined {
+  const key = activeProjectStorageKey()
+  if (!key) return undefined
+
+  const rawValue = window.localStorage.getItem(key)
+  const projectId = rawValue ? Number(rawValue) : Number.NaN
+  return Number.isInteger(projectId) && projectId > 0 ? projectId : undefined
+}
+
+function rememberActiveProject(projectId: number) {
+  const key = activeProjectStorageKey()
+  if (!key) return
+
+  window.localStorage.setItem(key, String(projectId))
+}
+
+function forgetActiveProject(projectId?: number) {
+  const key = activeProjectStorageKey()
+  if (!key) return
+
+  if (projectId && readRememberedProjectId() !== projectId) return
+
+  window.localStorage.removeItem(key)
 }
 </script>
 
@@ -551,7 +675,7 @@ function resetWorkspace() {
             :ai-runs="aiRuns"
             :chapter-analysis-logs="chapterAnalysisLogs"
             :is-loading-workspace="isLoadingWorkspace"
-            :is-analyzing-chapters="isAnalyzingChapters"
+            :is-analyzing-chapters="isChapterAnalysisBusy"
             :is-extracting="isExtracting"
             :is-generating-yaml="isGeneratingYaml"
             :is-saving-yaml="isSavingYaml"

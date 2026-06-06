@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from models.user import User
 from . import pipeline_service, service
 from .schemas import (
     ProjectCreateRequest,
+    ProjectChapterAnalysisJobResponse,
     ProjectChapterAnalysesResponse,
     ProjectChaptersRequest,
     ProjectChaptersResponse,
@@ -118,6 +119,31 @@ def analyze_project_chapters(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LLMResponseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{project_id}/chapter-analyses/jobs", response_model=ProjectChapterAnalysisJobResponse)
+def start_project_chapter_analysis_job(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ProjectChapterAnalysisJobResponse:
+    try:
+        job = pipeline_service.prepare_chapter_analysis_job(session, project_id, current_user.id)
+    except service.ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except pipeline_service.ProjectPipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if job.should_start:
+        background_tasks.add_task(
+            pipeline_service.run_chapter_analysis_job,
+            job.response.ai_run.id,
+            project_id,
+            current_user.id,
+        )
+
+    return job.response
 
 
 @router.post("/{project_id}/chapter-analyses/stream")
