@@ -31,6 +31,7 @@ const props = defineProps<{
   chapterAnalysesLength: number
   storyElements?: StoryElementsSnapshot
   scriptYaml: string
+  projectTitle: string
   scriptVersionName?: string
   aiRuns: AIRun[]
   chapterAnalysisLogs: ChapterAnalysisLogItem[]
@@ -38,6 +39,7 @@ const props = defineProps<{
   isAnalyzingChapters: boolean
   isExtracting: boolean
   isGeneratingYaml: boolean
+  isSavingYaml: boolean
 }>()
 
 const activeFlowTab = defineModel<string>('activeFlowTab', { required: true })
@@ -48,6 +50,7 @@ const emit = defineEmits<{
   analyzeChapters: []
   extractStoryElements: []
   generateScriptYaml: []
+  saveScriptYaml: [yamlContent: string, versionName: string]
 }>()
 </script>
 
@@ -274,9 +277,13 @@ const emit = defineEmits<{
           <ScriptYamlPanel
             v-model:active-yaml-tab="activeYamlTab"
             :script-yaml="scriptYaml"
+            :project-title="projectTitle"
+            :script-version-name="scriptVersionName"
             :has-story-elements="Boolean(storyElements)"
             :is-generating-yaml="isGeneratingYaml"
+            :is-saving-yaml="isSavingYaml"
             @generate="emit('generateScriptYaml')"
+            @save="(yamlContent, versionName) => emit('saveScriptYaml', yamlContent, versionName)"
           />
         </TabsContent>
       </Tabs>

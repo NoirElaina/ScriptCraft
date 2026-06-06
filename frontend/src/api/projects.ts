@@ -182,6 +182,12 @@ export interface ProjectScriptYamlResponse {
   script_version: ScriptVersion
 }
 
+export interface ProjectScriptVersionResponse {
+  project_id: number
+  title: string
+  script_version: ScriptVersion
+}
+
 export interface ProjectWorkspaceResponse {
   project: Project
   chapters: Chapter[]
@@ -282,6 +288,16 @@ export async function generateProjectScriptYaml(
   projectId: number,
 ): Promise<ProjectScriptYamlResponse> {
   return requestJson(`/api/projects/${projectId}/script-yaml`, { method: 'POST' })
+}
+
+export async function saveProjectScriptVersion(
+  projectId: number,
+  payload: { version_name: string; yaml_content: string },
+): Promise<ProjectScriptVersionResponse> {
+  return requestJson(`/api/projects/${projectId}/script-versions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 async function readErrorMessage(response: Response): Promise<string> {

@@ -15,7 +15,7 @@ from models.chapter_analysis import ChapterAnalysis
 from models.project import Project
 from models.script_version import ScriptVersion
 from models.story_element import StoryElement
-from script_yaml import ScriptYamlGenerator
+from script_yaml import ScriptYamlGenerator, normalize_script_yaml_content
 from story_elements import StoryElementExtractor
 from .schemas import (
     AIRunResponse,
@@ -25,6 +25,8 @@ from .schemas import (
     ProjectChaptersResponse,
     ProjectResponse,
     ProjectScriptYamlResponse,
+    ProjectScriptVersionRequest,
+    ProjectScriptVersionResponse,
     ProjectStoryElementsResponse,
     ProjectWorkspaceResponse,
     ScriptVersionResponse,
@@ -338,6 +340,38 @@ def generate_and_save_script_yaml(
         project_id=project.id,
         title=project.title,
         ai_run_id=ai_run.id,
+        script_version=ScriptVersionResponse.model_validate(script_version),
+    )
+
+
+def save_script_version(
+    session: Session,
+    project_id: int,
+    owner_id: int,
+    request: ProjectScriptVersionRequest,
+) -> ProjectScriptVersionResponse:
+    project = get_project(session, project_id, owner_id)
+    assign_owner_if_needed(project, owner_id)
+
+    try:
+        yaml_content = normalize_script_yaml_content(request.yaml_content)
+    except LLMResponseError:
+        raise
+
+    script_version = ScriptVersion(
+        project_id=project.id,
+        version_name=request.version_name.strip() or f"手动编辑版 {_next_script_version_index(session, project.id)}",
+        schema_version="1.0",
+        yaml_content=yaml_content,
+    )
+    project.status = "script_ready"
+    session.add(script_version)
+    session.commit()
+    session.refresh(script_version)
+
+    return ProjectScriptVersionResponse(
+        project_id=project.id,
+        title=project.title,
         script_version=ScriptVersionResponse.model_validate(script_version),
     )
 

@@ -123,6 +123,33 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
 
   const scriptParseError = computed(() => Boolean(scriptYaml.value && !scriptDocument.value))
 
+  const scriptValidationIssues = computed(() => {
+    if (!scriptYaml.value.trim()) return []
+    if (!scriptDocument.value) return ['YAML 解析失败']
+
+    const issues: string[] = []
+    const requiredKeys = ['schema_version', 'title', 'metadata', 'characters', 'locations', 'events', 'scenes']
+    for (const key of requiredKeys) {
+      if (!(key in scriptDocument.value)) {
+        issues.push(`缺少顶层字段：${key}`)
+      }
+    }
+    if (!scriptScenes.value.length) {
+      issues.push('至少需要包含一个 scene')
+    }
+    for (const scene of scriptScenes.value) {
+      if (!scene.beats.length) {
+        issues.push(`${scene.id} 至少需要包含一个 beat`)
+      }
+      for (const beat of scene.beats) {
+        if (beat.type === 'dialogue' && !beat.speaker_id) {
+          issues.push(`${scene.id} 的 dialogue beat 缺少 speaker_id`)
+        }
+      }
+    }
+    return issues
+  })
+
   const characterNameById = computed(() => {
     return new Map(scriptCharacters.value.map((character) => [character.id, character.name]))
   })
@@ -153,6 +180,7 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
 
   return {
     scriptParseError,
+    scriptValidationIssues,
     scriptCharacters,
     scriptLocations,
     scriptScenes,
