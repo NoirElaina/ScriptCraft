@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
@@ -11,6 +12,7 @@ from llm.base import LLMResponseError, parse_json_content
 class ChapterAnalysisState(TypedDict, total=False):
     title: str
     chapter: Mapping[str, Any]
+    memory: Mapping[str, Any]
     messages: list[BaseMessage]
     raw_payload: dict[str, Any]
     result: dict[str, Any]
@@ -20,8 +22,19 @@ class ChapterAnalyzer:
     def __init__(self, model: BaseChatModel) -> None:
         self.graph = build_chapter_analysis_graph(model)
 
-    def analyze(self, title: str, chapter: Mapping[str, Any]) -> dict[str, Any]:
-        state = self.graph.invoke({"title": title.strip() or "未命名小说", "chapter": chapter})
+    def analyze(
+        self,
+        title: str,
+        chapter: Mapping[str, Any],
+        memory: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        state = self.graph.invoke(
+            {
+                "title": title.strip() or "未命名小说",
+                "chapter": chapter,
+                "memory": memory or {},
+            }
+        )
         return state["result"]
 
 
@@ -42,6 +55,7 @@ def build_prompt_node(state: ChapterAnalysisState) -> ChapterAnalysisState:
         "messages": build_chapter_analysis_messages(
             title=state["title"],
             chapter=state["chapter"],
+            memory=state.get("memory", {}),
         )
     }
 
@@ -61,7 +75,12 @@ def normalize_node(state: ChapterAnalysisState) -> ChapterAnalysisState:
     return {"result": normalize_chapter_analysis(state["chapter"], state["raw_payload"])}
 
 
-def build_chapter_analysis_messages(title: str, chapter: Mapping[str, Any]) -> list[BaseMessage]:
+def build_chapter_analysis_messages(
+    title: str,
+    chapter: Mapping[str, Any],
+    memory: Mapping[str, Any] | None = None,
+) -> list[BaseMessage]:
+    memory = memory or {}
     return [
         SystemMessage(
             content=(
@@ -88,6 +107,8 @@ def build_chapter_analysis_messages(title: str, chapter: Mapping[str, Any]) -> l
                 '  "scene_candidates": [{"title": "", "location": "", "characters": [], "summary": "", "dramatic_purpose": "", "beats": []}],\n'
                 '  "continuity_notes": ["需要在后续章节保持一致的信息"]\n'
                 "}\n\n"
+                "前文短记忆 JSON：\n"
+                f"{json.dumps(memory, ensure_ascii=False)}\n\n"
                 "章节正文：\n"
                 f"{chapter.get('content', '')}"
             )

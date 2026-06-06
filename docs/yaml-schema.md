@@ -1,266 +1,283 @@
-# ScriptCraft 剧本 YAML Schema 设计文档
+# ScriptCraft 剧本 YAML Schema
 
 ## 1. 设计目标
 
-ScriptCraft 的目标是把 3 个章节以上的小说文本转换为可编辑、可校验、可继续打磨的剧本初稿。YAML Schema 是生成结果的结构约定，用于约束模型输出、驱动前端预览、支持后端校验，并为作者保留清晰的编辑入口。
+ScriptCraft 的 YAML 不只保存“剧本文字”，还保存一层可执行的分镜调度。作者拿到结果后，可以继续编辑角色、地点、事件、场次、节拍，也可以直接在工作台里预演某一场戏的镜头、人物站位、动作和对白。
 
+因此 Schema 拆成两层：
 
-## 2. 顶层结构
+- `scenes`：剧本正文层，记录场次、对白、动作、旁白等可编辑文本。
+- `storyboard`：导演调度层，引用 `scenes.beats`，描述画布如何播放这一场戏。
+
+这样设计的原因是：剧本文本和画面调度不是同一个东西。把它们分开，作者可以改台词而不丢分镜，也可以单独调整镜头和动作。
+
+## 2. 生成策略
+
+ScriptCraft 采用章节流式生成，而不是把整本小说一次性交给模型。
+
+生成时，后端按章节顺序循环：章节分析带入前文短记忆；故事元素按当前章增量归并角色、地点和事件；剧本阶段再用当前章节分析、全局元素表和剧本短记忆生成本章场景计划，并生成本章 `scenes` 与对应 `storyboard.scenes`。最终 YAML 由后端合并各章片段并统一校验。
+
+这样设计是为了支持长篇文本：即使作者一次导入很多章节，模型每次也只处理当前章和必要记忆，避免上下文膨胀、角色引用漂移和整本剧本反复重写。
+
+## 3. 顶层结构
 
 ```yaml
-schema_version: "1.0"
+schema_version: "2.0"
 title: "雨夜来信"
 metadata: {}
 characters: []
 locations: []
 events: []
 scenes: []
+storyboard:
+  scenes: []
 ```
-
-字段说明：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `schema_version` | string | 是 | Schema 版本，用于兼容不同输出结构。 |
-| `title` | string | 是 | 改编后的剧本标题。 |
-| `metadata` | object | 是 | 来源、风格、语言等元信息。 |
+| `schema_version` | string | 是 | 当前版本固定为 `2.0`。 |
+| `title` | string | 是 | 剧本标题。 |
+| `metadata` | object | 是 | 来源、语言、改编风格等信息。 |
 | `characters` | array | 是 | 角色表。 |
 | `locations` | array | 是 | 地点表。 |
-| `events` | array | 是 | 从小说章节中抽取的关键剧情事件。 |
-| `scenes` | array | 是 | 剧本场次列表。 |
+| `events` | array | 是 | 从小说章节抽取出的关键事件。 |
+| `scenes` | array | 是 | 剧本场次正文。 |
+| `storyboard` | object | 是 | 画布预演所需的导演调度。 |
 
-## 3. metadata
+## 4. metadata
 
 ```yaml
 metadata:
   source_title: "雨夜来信"
   chapters_count: 3
-  adaptation_style: "web_drama"
+  adaptation_style: "短剧"
   language: "zh-CN"
-  generated_at: "2026-06-05T12:00:00+08:00"
 ```
 
-字段说明：
+`metadata` 把生成上下文和剧本正文分离，便于后续导出、版本追踪和二次生成。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `source_title` | string | 是 | 原小说标题。 |
-| `chapters_count` | number | 是 | 参与改编的章节数量。 |
-| `adaptation_style` | string | 是 | 改编风格，例如 `web_drama`、`film`、`stage_play`。 |
-| `language` | string | 是 | 输出语言。 |
-| `generated_at` | string | 否 | 生成时间，使用 ISO 8601 格式。 |
-
-设计原因：
-
-- `metadata` 把剧本内容和生成上下文分离，保证预览、导出和校验逻辑能够复用同一份元信息。
-- `adaptation_style` 让同一份小说可以生成短剧、影视剧本、舞台剧等不同版本。
-
-## 4. characters
+## 5. characters
 
 ```yaml
 characters:
   - id: "char_001"
     name: "林舟"
     aliases: ["小林"]
-    role: "protagonist"
+    role: "主角"
     description: "年轻记者，正在追查父亲失踪的真相。"
     motivation: "找到匿名来信背后的发信人。"
 ```
 
-字段说明：
+角色用 `id` 引用，不直接用姓名引用。这样可以避免同名、别名、称呼变化导致的混乱。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 角色唯一标识。 |
-| `name` | string | 是 | 角色名称。 |
-| `aliases` | array | 否 | 角色别名。 |
-| `role` | string | 是 | 叙事职能，例如主角、反派、配角。 |
-| `description` | string | 是 | 角色简述。 |
-| `motivation` | string | 否 | 角色目标或行动动机。 |
-
-设计原因：
-
-- 使用 `id` 而不是直接用姓名引用角色，可以避免同名、别名和称呼变化导致的混乱。
-- `motivation` 用于辅助角色一致性检查，判断对白和行动是否符合角色目标。
-
-## 5. locations
+## 6. locations
 
 ```yaml
 locations:
   - id: "loc_001"
-    name: "老城区咖啡馆"
+    name: "老城区书店"
     description: "灯光昏暗，靠窗位置能看到雨夜街道。"
 ```
 
-字段说明：
+地点独立成表，方便多个场次复用，也方便前端根据地点生成画布背景。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 地点唯一标识。 |
-| `name` | string | 是 | 地点名称。 |
-| `description` | string | 否 | 地点视觉或氛围描述。 |
-
-设计原因：
-
-- 地点独立成表，便于多个场次复用同一地点。
-- `description` 为分镜、场景提示词和美术设定提供可复用的场景信息。
-
-## 6. events
+## 7. events
 
 ```yaml
 events:
   - id: "event_001"
     source_chapter: "chapter_001"
-    summary: "林舟收到匿名短信，被约到老城区咖啡馆。"
+    summary: "林舟收到匿名短信，被约到老城区书店。"
     involved_characters: ["char_001"]
 ```
 
-字段说明：
+`events` 是小说章节和剧本场次之间的中间层。先抽事件再写场次，可以减少长文本一次性改编的不稳定。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 事件唯一标识。 |
-| `source_chapter` | string | 是 | 事件来源章节。 |
-| `summary` | string | 是 | 事件摘要。 |
-| `involved_characters` | array | 否 | 参与该事件的角色 ID。 |
-
-设计原因：
-
-- `events` 是小说章节和剧本场次之间的中间层。
-- 先抽事件再生成场次，可以降低一次性生成整篇剧本的不稳定性。
-
-## 7. scenes
+## 8. scenes
 
 ```yaml
 scenes:
   - id: "scene_001"
-    title: "雨夜邀约"
+    title: "雨夜来信"
     source_chapters: ["chapter_001"]
     source_events: ["event_001"]
     location_id: "loc_001"
     time_of_day: "night"
-    characters: ["char_001"]
-    dramatic_purpose: "建立悬念并引出主角目标。"
-    summary: "林舟来到咖啡馆，等待匿名发信人出现。"
-    beats: []
+    characters: ["char_001", "char_002"]
+    dramatic_purpose: "建立悬念，引出主角目标。"
+    summary: "林舟走进即将打烊的旧书店，遇到神秘老人。"
+    beats:
+      - id: "beat_001"
+        type: "action"
+        content: "林舟推门进入书店，雨水顺着伞尖滴落。"
+      - id: "beat_002"
+        type: "dialogue"
+        speaker_id: "char_001"
+        content: "你到底是谁？"
 ```
 
-字段说明：
+`beats` 是场次内部的最小编辑单位。每个 beat 必须有 `id`，因为 `storyboard.timeline` 会引用它。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 场次唯一标识。 |
-| `title` | string | 是 | 场次标题。 |
-| `source_chapters` | array | 是 | 场次来源章节 ID。 |
-| `source_events` | array | 否 | 场次来源事件 ID。 |
-| `location_id` | string | 是 | 场次地点 ID。 |
-| `time_of_day` | string | 否 | 时间，例如 `morning`、`night`。 |
-| `characters` | array | 是 | 出场角色 ID。 |
-| `dramatic_purpose` | string | 否 | 该场戏在叙事中的作用。 |
-| `summary` | string | 是 | 场次摘要。 |
-| `beats` | array | 是 | 场次内的动作、对白、旁白等有序内容。 |
-
-设计原因：
-
-- 剧本按场组织，而不是按小说章节组织，所以 `scenes` 是最终剧本的核心。
-- `source_chapters` 保留溯源关系，作者可以据此核对场次与原文的对应关系。
-- `dramatic_purpose` 明确场次的叙事作用，便于判断某场戏是否具有保留价值。
-
-## 8. beats
-
-```yaml
-beats:
-  - type: "action"
-    content: "林舟推门进入咖啡馆，雨水顺着伞尖滴落。"
-  - type: "dialogue"
-    speaker_id: "char_001"
-    content: "你到底是谁？"
-  - type: "narration"
-    content: "手机屏幕亮起，新的短信只有四个字：别回头。"
-```
-
-字段说明：
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `type` | string | 是 | 节拍类型。 |
-| `speaker_id` | string | 当 `type=dialogue` 时必填 | 说话角色 ID。 |
-| `content` | string | 是 | 节拍内容。 |
-
-支持的 `type`：
+支持的 `beat.type`：
 
 - `action`：动作或画面描述。
-- `dialogue`：角色对白。
+- `dialogue`：角色对白，必须包含 `speaker_id`。
 - `narration`：旁白或叙述。
 - `transition`：转场提示。
 - `sound`：声音提示。
 
-设计原因：
-
-- `beats` 保留场次内部顺序，适合前端逐条编辑。
-- 区分动作、对白、旁白后，系统可以导出不同剧本格式，并支持对白占比、角色出场统计等分析。
-
-## 9. 完整示例
+## 9. storyboard
 
 ```yaml
-schema_version: "1.0"
-title: "雨夜来信"
-metadata:
-  source_title: "雨夜来信"
-  chapters_count: 3
-  adaptation_style: "web_drama"
-  language: "zh-CN"
-characters:
-  - id: "char_001"
-    name: "林舟"
-    aliases: ["小林"]
-    role: "protagonist"
-    description: "年轻记者，正在追查父亲失踪的真相。"
-    motivation: "找到匿名来信背后的发信人。"
-locations:
-  - id: "loc_001"
-    name: "老城区咖啡馆"
-    description: "灯光昏暗，靠窗位置能看到雨夜街道。"
-events:
-  - id: "event_001"
-    source_chapter: "chapter_001"
-    summary: "林舟收到匿名短信，被约到老城区咖啡馆。"
-    involved_characters: ["char_001"]
-scenes:
-  - id: "scene_001"
-    title: "雨夜邀约"
-    source_chapters: ["chapter_001"]
-    source_events: ["event_001"]
-    location_id: "loc_001"
-    time_of_day: "night"
-    characters: ["char_001"]
-    dramatic_purpose: "建立悬念并引出主角目标。"
-    summary: "林舟来到咖啡馆，等待匿名发信人出现。"
-    beats:
-      - type: "action"
-        content: "林舟推门进入咖啡馆，雨水顺着伞尖滴落。"
-      - type: "dialogue"
-        speaker_id: "char_001"
-        content: "你到底是谁？"
-      - type: "narration"
-        content: "手机屏幕亮起，新的短信只有四个字：别回头。"
+storyboard:
+  scenes:
+    - scene_id: "scene_001"
+      setting:
+        mood: "mysterious"
+        weather: "rain"
+        lighting: "dim"
+        background: "old_bookstore"
+      cast:
+        - character_id: "char_001"
+          position: "left"
+          pose: "holding_umbrella"
+        - character_id: "char_002"
+          position: "right"
+          pose: "behind_counter"
+      timeline:
+        - id: "shot_001"
+          source_beat_id: "beat_001"
+          type: "action"
+          duration_ms: 2600
+          camera:
+            shot: "wide"
+            target: "stage"
+            movement: "slow_push"
+          actions:
+            - actor: "char_001"
+              motion: "walk_in"
+              from: "offscreen_left"
+              to: "left"
+              emotion: "nervous"
+          effects: ["rain", "dim_light"]
+          props:
+            - id: "prop_001"
+              name: "雨伞"
+              action: "carry"
+              from: "offscreen_left"
+              to: "left"
+        - id: "shot_002"
+          source_beat_id: "beat_002"
+          type: "dialogue"
+          duration_ms: 2200
+          camera:
+            shot: "medium"
+            target: "char_001"
+            movement: "cut"
+          actions:
+            - actor: "char_001"
+              motion: "step_forward"
+              from: "left"
+              to: "center"
+              emotion: "determined"
+          dialogue:
+            speaker_id: "char_001"
+            text: "你到底是谁？"
+          effects: []
 ```
+
+### setting
+
+`setting` 描述画布的整体氛围：
+
+| 字段 | 说明 |
+| --- | --- |
+| `mood` | 情绪，例如 `mysterious`、`tense`、`warm`。 |
+| `weather` | 天气，例如 `rain`、`clear`。 |
+| `lighting` | 光线，例如 `dim`、`cold`、`warm`。 |
+| `background` | 背景类型，例如 `old_bookstore`、`office`、`street`。 |
+
+### cast
+
+`cast` 描述角色初始出场站位和姿态。环境空镜、旁白、转场或声音场可以使用空 `cast`。如果某个 shot 里出现对白或人物动作，对应角色必须出现在 `cast` 中。
+
+这里的 `position` 必须是画布内位置，不能使用 `offscreen_left` 或 `offscreen_right`。
+
+- `left`
+- `back_left`
+- `center`
+- `back_right`
+- `right`
+
+### timeline
+
+`timeline` 是可执行的播放轨道。每个 shot 引用一个 `source_beat_id`，并额外给出镜头、动作、道具和效果。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | 是 | 镜头唯一标识。 |
+| `source_beat_id` | string | 是 | 引用当前 scene 中的 beat。 |
+| `type` | string | 是 | 与 beat 类型一致或接近。 |
+| `duration_ms` | number | 是 | 播放时长。 |
+| `camera` | object | 是 | 镜头调度。 |
+| `actions` | array | 是 | 人物动作。 |
+| `dialogue` | object | 当 `type=dialogue` 时必填 | 台词内容。 |
+| `effects` | array | 否 | 氛围效果，例如 `rain`、`flicker`、`spotlight`。 |
+| `props` | array | 否 | 道具调度。 |
+
+`camera.shot` 支持：
+
+- `wide`
+- `medium`
+- `close`
+- `insert`
+
+`camera.movement` 支持：
+
+- `cut`
+- `slow_push`
+- `pan`
+- `shake`
+- `hold`
+
+`action.motion` 支持：
+
+- `idle`
+- `walk_in`
+- `walk_to`
+- `step_forward`
+- `turn`
+- `look_around`
+- `point`
+- `hand_prop`
+- `place_prop`
+- `pick_prop`
+- `react`
+- `close_door`
+
+`action.from` 和 `action.to` 可以使用 `offscreen_left`、`offscreen_right` 表示入场或离场，但 `cast.position` 不使用场外位置。
 
 ## 10. 校验规则
 
-系统按以下规则校验生成结果：
+系统至少校验以下内容：
 
-- 顶层必须包含 `schema_version`、`title`、`metadata`、`characters`、`locations`、`events`、`scenes`。
+- 顶层必须包含 `schema_version`、`title`、`metadata`、`characters`、`locations`、`events`、`scenes`、`storyboard`。
+- `schema_version` 必须是 `2.0`。
 - 每个 `character.id`、`location.id`、`event.id`、`scene.id` 必须唯一。
 - `scene.location_id` 必须存在于 `locations`。
 - `scene.characters` 中的角色 ID 必须存在于 `characters`。
 - `scene.source_events` 中的事件 ID 必须存在于 `events`。
-- `dialogue` 类型的 beat 必须包含 `speaker_id`。
-- `speaker_id` 必须存在于 `characters`。
-- 每个 scene 至少包含一个 beat。
+- 每个 `beat` 必须包含 `id`、`type`、`content`。
+- `dialogue` 类型的 beat 必须包含 `speaker_id`，且角色必须存在。
+- `storyboard.scenes` 必须覆盖每个 scene。
+- `storyboard.timeline.source_beat_id` 必须引用当前 scene 的 beat。
+- `cast` 可以为空，但 `action.actor`、`dialogue.speaker_id` 必须引用已有角色，且必须出现在当前 storyboard scene 的 `cast` 中。
+- `duration_ms` 必须大于 0。
 
-## 11. 版本兼容说明
+## 11. 设计原因
 
-当前 Schema 以“角色、地点、事件、场次、节拍”为核心结构，优先保证小说到剧本初稿的可追溯和可编辑。`schema_version` 用于标识结构版本；当输出结构升级时，系统应保留旧版本的读取能力，避免影响已经生成的剧本版本。
+这个 Schema 的核心取舍是“正文可编辑，调度可执行”。
 
-本版本暂不把幕结构、镜头语言和人物关系图作为必填字段。它们更适合作为独立编辑能力接入，避免基础剧本初稿过早承载过多格式要求。
+`scenes.beats` 保留作者最关心的文本结构：对白、动作、旁白、转场。`storyboard.timeline` 则服务于画布预演，负责镜头、动作、站位、道具和氛围效果。两层通过 `source_beat_id` 建立关系，既能追溯原文，又不会把视觉调度塞进每一条台词里。
+
+这种设计也方便后续扩展：如果要增加角色关系图、镜头表、导出 Fountain/Markdown，或者加入语音、口型和背景图，都可以基于同一份 YAML 继续向外扩展。

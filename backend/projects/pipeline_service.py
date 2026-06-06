@@ -144,7 +144,11 @@ def run_chapter_analysis_job(
             analyzer = ChapterAnalyzer(model)
 
             for chapter in chapters:
-                analysis_payload = analyzer.analyze(project.title, _chapter_payload(chapter))
+                analysis_payload = analyzer.analyze(
+                    project.title,
+                    _chapter_payload(chapter),
+                    memory=_chapter_analysis_memory(output_payloads),
+                )
                 output_payloads.append(analysis_payload)
                 _save_chapter_analysis(session, project.id, chapter, analysis_payload)
                 session.commit()
@@ -219,7 +223,11 @@ def run_story_elements_job(
             project = get_project(session, project_id, owner_id)
             chapters = _require_chapter_analysis_contexts(session, project)
             model = model_factory()
-            result = StoryElementExtractor(model).extract(project.title, chapters)
+            result = StoryElementExtractor(model).extract(
+                project.title,
+                chapters,
+                on_progress=lambda progress: _update_ai_run_progress(session, ai_run, progress),
+            )
 
             story_element = StoryElement(
                 project_id=project.id,
@@ -301,12 +309,13 @@ def run_script_yaml_job(
                 characters=story_element.characters,
                 locations=story_element.locations,
                 events=story_element.events,
+                on_progress=lambda progress: _update_ai_run_progress(session, ai_run, progress),
             )
 
             script_version = ScriptVersion(
                 project_id=project.id,
                 version_name=f"AI 初稿 {_next_script_version_index(session, project.id)}",
-                schema_version="1.0",
+                schema_version="2.0",
                 yaml_content=yaml_content,
             )
             project.status = "script_ready"
@@ -338,7 +347,7 @@ def save_script_version(
     script_version = ScriptVersion(
         project_id=project.id,
         version_name=request.version_name.strip() or f"手动编辑版 {_next_script_version_index(session, project.id)}",
-        schema_version="1.0",
+        schema_version="2.0",
         yaml_content=yaml_content,
     )
     project.status = "script_ready"
@@ -412,8 +421,35 @@ def _chapter_analysis_input_payload(project: Project, chapters: list[Chapter]) -
     }
 
 
+def _chapter_analysis_memory(previous_analyses: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "story_so_far": " ".join(str(item.get("summary", "")).strip() for item in previous_analyses if item.get("summary")),
+        "known_characters": _unique_texts(
+            character.get("name")
+            for analysis in previous_analyses
+            for character in analysis.get("characters", [])
+            if isinstance(character, dict)
+        ),
+        "known_locations": _unique_texts(
+            location.get("name")
+            for analysis in previous_analyses
+            for location in analysis.get("locations", [])
+            if isinstance(location, dict)
+        ),
+        "continuity_notes": _unique_texts(
+            note
+            for analysis in previous_analyses
+            for note in analysis.get("continuity_notes", [])
+        ),
+    }
+
+
 def _story_elements_input_payload(project: Project, chapters: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"title": project.title, "chapters": chapters}
+    return {
+        "title": project.title,
+        "generation_mode": "chapter_streaming",
+        "chapter_count": len(chapters),
+    }
 
 
 def _script_yaml_input_payload(
@@ -423,10 +459,11 @@ def _script_yaml_input_payload(
 ) -> dict[str, Any]:
     return {
         "title": project.title,
-        "chapters": chapters,
-        "characters": story_element.characters,
-        "locations": story_element.locations,
-        "events": story_element.events,
+        "generation_mode": "chapter_streaming",
+        "chapter_count": len(chapters),
+        "character_count": len(story_element.characters),
+        "location_count": len(story_element.locations),
+        "event_count": len(story_element.events),
     }
 
 
@@ -458,6 +495,17 @@ def _task_type_label(task_type: str) -> str:
         "script_yaml": "剧本 YAML 生成",
     }
     return labels.get(task_type, task_type)
+
+
+def _unique_texts(values) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            texts.append(text)
+    return texts
 
 
 def _list_chapter_analyses(session: Session, project_id: int) -> list[ChapterAnalysis]:
@@ -607,9 +655,19 @@ def _finish_ai_run(
 ) -> None:
     ai_run.status = status
     ai_run.duration_ms = int((perf_counter() - started_at) * 1000)
-    ai_run.output_payload = output_payload
+    if output_payload is not None:
+        ai_run.output_payload = output_payload
     ai_run.error_message = error_message
     session.add(ai_run)
+
+
+def _update_ai_run_progress(session: Session, ai_run: AIRun, progress: dict[str, Any]) -> None:
+    if ai_run.status != "running":
+        return
+
+    ai_run.output_payload = {"progress": dict(progress)}
+    session.add(ai_run)
+    session.commit()
 
 
 def _mark_chapter_analysis_job_failed(

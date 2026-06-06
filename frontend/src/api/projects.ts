@@ -137,6 +137,7 @@ export interface AIRun {
   status: string
   error_message: string
   duration_ms: number | null
+  output_payload: Record<string, unknown> | null
   created_at: string
 }
 

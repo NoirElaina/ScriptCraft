@@ -4,12 +4,21 @@ import sys
 import unittest
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from pydantic import Field
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from chapter_analysis import ChapterAnalyzer
+
+
+class RecordingFakeChatModel(FakeListChatModel):
+    prompts: list[str] = Field(default_factory=list)
+
+    def _call(self, messages, *args, **kwargs):
+        self.prompts.append("\n".join(str(message.content) for message in messages))
+        return super()._call(messages, *args, **kwargs)
 
 
 class ChapterAnalysisTests(unittest.TestCase):
@@ -78,6 +87,43 @@ class ChapterAnalysisTests(unittest.TestCase):
         self.assertEqual(result["characters"][0]["name"], "林舟")
         self.assertEqual(result["events"][0]["event_type"], "inciting_incident")
         self.assertEqual(result["scene_candidates"][0]["beats"][1], "旧终端亮起")
+
+    def test_includes_previous_memory_in_chapter_prompt(self):
+        model = RecordingFakeChatModel(
+            responses=[
+                json.dumps(
+                    {
+                        "summary": "林舟继续追查外界信号。",
+                        "characters": [],
+                        "locations": [],
+                        "events": [],
+                        "conflicts": [],
+                        "dialogue_candidates": [],
+                        "scene_candidates": [],
+                        "continuity_notes": [],
+                    },
+                    ensure_ascii=False,
+                )
+            ]
+        )
+
+        ChapterAnalyzer(model).analyze(
+            title="星火计划",
+            chapter={
+                "id": "chapter_002",
+                "index": 2,
+                "heading": "第二章",
+                "title": "追踪",
+                "content": "林舟追查信号。",
+            },
+            memory={
+                "story_so_far": "第 1 章中林舟在废弃天台收到外界信号。",
+                "continuity_notes": ["外界信号来源未明"],
+            },
+        )
+
+        self.assertIn("第 1 章中林舟在废弃天台收到外界信号", model.prompts[0])
+        self.assertIn("外界信号来源未明", model.prompts[0])
 
 
 if __name__ == "__main__":

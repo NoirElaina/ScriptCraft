@@ -37,13 +37,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { normalizeNovelText } from '@/lib/novel-text'
 
-interface ChapterAnalysisLogItem {
-  id: string
-  status: 'running' | 'succeeded' | 'failed'
-  message: string
-  createdAt: string
-}
-
 const ACTIVE_PROJECT_STORAGE_PREFIX = 'scriptcraft.activeProjectId'
 const WORKSPACE_POLL_INTERVAL_MS = 1800
 
@@ -73,7 +66,6 @@ const isLoggingOut = ref(false)
 const projectErrorMessage = ref('')
 const workspaceErrorMessage = ref('')
 const pipelineErrorMessage = ref('')
-const chapterAnalysisLogs = ref<ChapterAnalysisLogItem[]>([])
 
 const currentProject = computed(() => workspace.value?.project)
 const chapters = computed(() => workspace.value?.chapters ?? [])
@@ -368,13 +360,11 @@ async function handleAnalyzeProjectChapters() {
   if (!project) return
 
   pipelineErrorMessage.value = ''
-  chapterAnalysisLogs.value = []
   isAnalyzingChapters.value = true
   activeFlowTab.value = 'pipeline'
 
   try {
-    const result = await startProjectChapterAnalysisJob(project.id)
-    appendChapterAnalysisLog('running', `章节分析任务已启动：${result.ai_run.status}`)
+    await startProjectChapterAnalysisJob(project.id)
     await refreshWorkspaceSnapshot(project.id)
     startWorkspacePolling(project.id)
   } catch (error) {
@@ -460,78 +450,11 @@ function applyWorkspace(
     result.chapters.some((chapter) => chapter.id === previousSelectedChapterId)
       ? previousSelectedChapterId
       : result.chapters[0]?.id
-
-  syncChapterAnalysisLogs(result)
-}
-
-function syncChapterAnalysisLogs(result: ProjectWorkspaceResponse) {
-  const latestChapterAnalysisRun = result.ai_runs.find((run) => run.task_type === 'chapter_analysis')
-  if (!latestChapterAnalysisRun) return
-
-  const isRunning =
-    result.project.status === 'chapter_analysis_running' || latestChapterAnalysisRun.status === 'running'
-  if (!isRunning) {
-    if (latestChapterAnalysisRun.status === 'succeeded') {
-      chapterAnalysisLogs.value = [
-        ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
-        {
-          id: `run-${latestChapterAnalysisRun.id}-succeeded`,
-          status: 'succeeded',
-          message: '全部章节分析完成',
-          createdAt: latestChapterAnalysisRun.created_at,
-        },
-      ]
-    }
-    if (latestChapterAnalysisRun.status === 'failed') {
-      chapterAnalysisLogs.value = [
-        ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
-        {
-          id: `run-${latestChapterAnalysisRun.id}-failed`,
-          status: 'failed',
-          message: latestChapterAnalysisRun.error_message || '章节分析失败',
-          createdAt: latestChapterAnalysisRun.created_at,
-        },
-      ]
-    }
-    return
-  }
-
-  chapterAnalysisLogs.value = [
-    ...result.chapter_analyses.map((analysis) => chapterAnalysisLogFromRecord(analysis)),
-    {
-      id: `run-${latestChapterAnalysisRun.id}-running-${result.chapter_analyses.length}`,
-      status: 'running',
-      message: `章节分析进行中：已完成 ${result.chapter_analyses.length}/${result.chapters.length} 章`,
-      createdAt: latestChapterAnalysisRun.created_at,
-    },
-  ]
-}
-
-function chapterAnalysisLogFromRecord(analysis: ChapterAnalysis): ChapterAnalysisLogItem {
-  return {
-    id: `analysis-${analysis.id}`,
-    status: 'succeeded',
-    message: `第 ${analysis.chapter_index} 章分析完成`,
-    createdAt: analysis.updated_at,
-  }
-}
-
-function appendChapterAnalysisLog(status: ChapterAnalysisLogItem['status'], message: string) {
-  chapterAnalysisLogs.value = [
-    ...chapterAnalysisLogs.value,
-    {
-      id: `${Date.now()}-${chapterAnalysisLogs.value.length}`,
-      status,
-      message,
-      createdAt: new Date().toISOString(),
-    },
-  ]
 }
 
 function clearDraftText() {
   novelText.value = ''
   pipelineErrorMessage.value = ''
-  chapterAnalysisLogs.value = []
 }
 
 function tidyDraftText(): string {
@@ -696,7 +619,6 @@ function forgetActiveProject(projectId?: number) {
             :project-title="currentProject.title"
             :script-version-name="scriptVersionName"
             :ai-runs="aiRuns"
-            :chapter-analysis-logs="chapterAnalysisLogs"
             :is-loading-workspace="isLoadingWorkspace"
             :is-analyzing-chapters="isChapterAnalysisBusy"
             :is-extracting="isStoryElementsBusy"

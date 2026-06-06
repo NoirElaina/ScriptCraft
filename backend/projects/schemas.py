@@ -145,6 +145,7 @@ class AIRunResponse(BaseModel):
     status: str
     error_message: str
     duration_ms: int | None
+    output_payload: dict | None
     created_at: datetime
 
 

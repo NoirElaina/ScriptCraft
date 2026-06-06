@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   CheckCircle2,
   Clock,
@@ -19,11 +20,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatTime, runStatusClass, taskLabel } from '@/lib/workspace-formatters'
 import ScriptYamlPanel from './ScriptYamlPanel.vue'
 
-interface ChapterAnalysisLogItem {
-  id: string
-  status: 'running' | 'succeeded' | 'failed'
-  message: string
-  createdAt: string
+interface AITaskProgress {
+  phase?: string
+  message?: string
+  chapter_index?: number
+  chapter_total?: number
+  completed_chapters?: number
+  current_chapter_title?: string
+  character_count?: number
+  location_count?: number
+  event_count?: number
+  fragment_count?: number
 }
 
 const props = defineProps<{
@@ -34,7 +41,6 @@ const props = defineProps<{
   projectTitle: string
   scriptVersionName?: string
   aiRuns: AIRun[]
-  chapterAnalysisLogs: ChapterAnalysisLogItem[]
   isLoadingWorkspace: boolean
   isAnalyzingChapters: boolean
   isExtracting: boolean
@@ -46,6 +52,28 @@ const props = defineProps<{
 const activeFlowTab = defineModel<string>('activeFlowTab', { required: true })
 const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 
+const storyElementsProgress = computed(() => taskProgress('story_elements'))
+const scriptYamlProgress = computed(() => taskProgress('script_yaml'))
+const chapterAnalysisProgressPercent = computed(() => {
+  if (props.chaptersLength === 0) return 0
+  if (props.chapterAnalysesLength >= props.chaptersLength) return 100
+
+  const partialChapter = props.isAnalyzingChapters ? 0.35 : 0
+  return Math.min(100, Math.round(((props.chapterAnalysesLength + partialChapter) / props.chaptersLength) * 100))
+})
+const chapterAnalysisProgressMessage = computed(() => {
+  if (props.chapterAnalysesLength >= props.chaptersLength && props.chaptersLength >= 3) {
+    return '全部章节分析完成'
+  }
+  const currentChapter = Math.min(props.chapterAnalysesLength + 1, props.chaptersLength)
+  return `正在分析第 ${currentChapter} 章：${props.chapterAnalysesLength}/${props.chaptersLength}`
+})
+const shouldShowChapterAnalysisProgress = computed(() => {
+  return props.isAnalyzingChapters || props.chapterAnalysesLength > 0
+})
+const storyElementsProgressPercent = computed(() => progressPercent(storyElementsProgress.value, 'story_elements'))
+const scriptYamlProgressPercent = computed(() => progressPercent(scriptYamlProgress.value, 'script_yaml'))
+
 const emit = defineEmits<{
   refresh: []
   analyzeChapters: []
@@ -53,6 +81,46 @@ const emit = defineEmits<{
   generateScriptYaml: []
   saveScriptYaml: [yamlContent: string, versionName: string]
 }>()
+
+function taskProgress(taskType: string): AITaskProgress | undefined {
+  const run = props.aiRuns.find((item) => item.task_type === taskType && item.status === 'running')
+  const payload = run?.output_payload
+  if (!isRecord(payload)) return undefined
+
+  const progress = payload.progress
+  return isRecord(progress) ? (progress as AITaskProgress) : undefined
+}
+
+function progressPercent(progress: AITaskProgress | undefined, taskType: 'story_elements' | 'script_yaml'): number {
+  if (!progress?.chapter_total) return 0
+  const completed = Math.max(0, Number(progress.completed_chapters ?? 0))
+  const chapterIndex = Math.max(1, Number(progress.chapter_index ?? 1))
+  const phaseWeight = taskType === 'script_yaml'
+    ? scriptYamlPhaseWeight(progress.phase)
+    : storyElementsPhaseWeight(progress.phase)
+  const currentChapterProgress = Math.max(0, chapterIndex - 1 + phaseWeight)
+  const rawPercent = Math.max(completed, currentChapterProgress) / progress.chapter_total
+  return Math.min(100, Math.max(0, Math.round(rawPercent * 100)))
+}
+
+function storyElementsPhaseWeight(phase?: string): number {
+  if (phase === 'chapter_completed' || phase === 'finished') return 1
+  if (phase === 'chapter_processing') return 0.35
+  return 0
+}
+
+function scriptYamlPhaseWeight(phase?: string): number {
+  if (phase === 'fragment_generation') return 0.5
+  if (phase === 'memory_update') return 0.8
+  if (phase === 'chapter_completed' || phase === 'finished') return 1
+  if (phase === 'assemble') return 1
+  if (phase === 'scene_planning') return 0.2
+  return 0
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 </script>
 
 <template>
@@ -114,24 +182,23 @@ const emit = defineEmits<{
                     分析
                   </Button>
                 </div>
-                <div v-if="chapterAnalysisLogs.length > 0" class="mt-3 space-y-2 border-t pt-3">
-                  <div
-                    v-for="log in chapterAnalysisLogs"
-                    :key="log.id"
-                    class="flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs"
-                  >
-                    <Loader2
-                      v-if="log.status === 'running'"
-                      class="mt-0.5 size-3.5 shrink-0 animate-spin text-sky-600"
-                    />
-                    <CheckCircle2
-                      v-else-if="log.status === 'succeeded'"
-                      class="mt-0.5 size-3.5 shrink-0 text-emerald-600"
-                    />
-                    <span v-else class="mt-1.5 size-2 shrink-0 rounded-full bg-destructive" />
-                    <span class="min-w-0 flex-1 leading-5">{{ log.message }}</span>
-                    <span class="shrink-0 text-muted-foreground">{{ formatTime(log.createdAt) }}</span>
+                <div v-if="shouldShowChapterAnalysisProgress" class="mt-3 rounded-md bg-muted/50 p-3">
+                  <div class="flex items-start justify-between gap-3 text-xs">
+                    <span class="min-w-0 flex-1 leading-5 text-muted-foreground">
+                      {{ chapterAnalysisProgressMessage }}
+                    </span>
+                    <span class="shrink-0 font-medium">{{ chapterAnalysisProgressPercent }}%</span>
                   </div>
+                  <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+                    <div
+                      class="h-full rounded-full bg-sky-600"
+                      :style="{ width: `${chapterAnalysisProgressPercent}%` }"
+                    />
+                  </div>
+                  <p class="mt-2 text-xs text-muted-foreground">
+                    已完成 {{ chapterAnalysesLength }} / {{ chaptersLength }} 章，
+                    后续故事元素和剧本生成会复用章节结构化结果。
+                  </p>
                 </div>
               </div>
 
@@ -159,6 +226,27 @@ const emit = defineEmits<{
                     抽取
                   </Button>
                 </div>
+                <div v-if="storyElementsProgress" class="mt-3 rounded-md bg-muted/50 p-3">
+                  <div class="flex items-start justify-between gap-3 text-xs">
+                    <span class="min-w-0 flex-1 leading-5 text-muted-foreground">
+                      {{ storyElementsProgress.message }}
+                    </span>
+                    <span class="shrink-0 font-medium">{{ storyElementsProgressPercent }}%</span>
+                  </div>
+                  <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+                    <div
+                      class="h-full rounded-full bg-emerald-600"
+                      :style="{ width: `${storyElementsProgressPercent}%` }"
+                    />
+                  </div>
+                  <p class="mt-2 text-xs text-muted-foreground">
+                    已完成 {{ storyElementsProgress.completed_chapters ?? 0 }} /
+                    {{ storyElementsProgress.chapter_total ?? chaptersLength }} 章，
+                    当前累计角色 {{ storyElementsProgress.character_count ?? 0 }} 个，地点
+                    {{ storyElementsProgress.location_count ?? 0 }} 个，事件
+                    {{ storyElementsProgress.event_count ?? 0 }} 个。
+                  </p>
+                </div>
               </div>
 
               <div class="rounded-lg border bg-background p-4">
@@ -182,6 +270,25 @@ const emit = defineEmits<{
                     <Sparkles v-else class="size-4" />
                     生成
                   </Button>
+                </div>
+                <div v-if="scriptYamlProgress" class="mt-3 rounded-md bg-muted/50 p-3">
+                  <div class="flex items-start justify-between gap-3 text-xs">
+                    <span class="min-w-0 flex-1 leading-5 text-muted-foreground">
+                      {{ scriptYamlProgress.message }}
+                    </span>
+                    <span class="shrink-0 font-medium">{{ scriptYamlProgressPercent }}%</span>
+                  </div>
+                  <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-background">
+                    <div
+                      class="h-full rounded-full bg-sky-600"
+                      :style="{ width: `${scriptYamlProgressPercent}%` }"
+                    />
+                  </div>
+                  <p class="mt-2 text-xs text-muted-foreground">
+                    已完成 {{ scriptYamlProgress.completed_chapters ?? 0 }} /
+                    {{ scriptYamlProgress.chapter_total ?? chaptersLength }} 章，
+                    已生成片段 {{ scriptYamlProgress.fragment_count ?? 0 }} 个。
+                  </p>
                 </div>
               </div>
 
