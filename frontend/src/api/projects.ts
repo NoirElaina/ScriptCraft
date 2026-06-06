@@ -1,6 +1,5 @@
 import type { Chapter } from './chapters'
-import { getAuthToken, requestJson } from './client'
-import type { StoryCharacter, StoryEvent, StoryLocation } from './story-elements'
+import { requestJson } from './client'
 
 export interface Project {
   id: number
@@ -82,66 +81,33 @@ export interface ChapterAnalysis {
   updated_at: string
 }
 
-export interface ProjectChapterAnalysesResponse {
-  project_id: number
-  title: string
-  ai_run_id: number
-  chapter_analyses: ChapterAnalysis[]
-}
-
-export interface ProjectChapterAnalysisJobResponse {
+export interface ProjectAITaskJobResponse {
   project_id: number
   title: string
   ai_run: AIRun
 }
 
-export interface ChapterAnalysisStreamChapter {
+export interface StoryCharacter {
   id: string
-  index: number
-  heading: string
-  title: string
+  name: string
+  aliases: string[]
+  role: string
+  description: string
+  motivation: string
 }
 
-export type ChapterAnalysisStreamEvent =
-  | {
-      type: 'started'
-      project_id: number
-      title: string
-      ai_run_id: number
-      total: number
-      message: string
-    }
-  | {
-      type: 'chapter_started'
-      project_id: number
-      ai_run_id: number
-      chapter: ChapterAnalysisStreamChapter
-      progress: { current: number; total: number }
-      message: string
-    }
-  | {
-      type: 'chapter_completed'
-      project_id: number
-      ai_run_id: number
-      chapter_analysis: ChapterAnalysis
-      progress: { current: number; total: number }
-      message: string
-    }
-  | {
-      type: 'completed'
-      project_id: number
-      title: string
-      ai_run_id: number
-      chapter_analyses: ChapterAnalysis[]
-      message: string
-    }
-  | {
-      type: 'error'
-      project_id?: number
-      ai_run_id?: number
-      status_code?: number
-      message: string
-    }
+export interface StoryLocation {
+  id: string
+  name: string
+  description: string
+}
+
+export interface StoryEvent {
+  id: string
+  source_chapter: string
+  summary: string
+  involved_characters: string[]
+}
 
 export interface StoryElementsSnapshot {
   id: number
@@ -150,13 +116,6 @@ export interface StoryElementsSnapshot {
   locations: StoryLocation[]
   events: StoryEvent[]
   created_at: string
-}
-
-export interface ProjectStoryElementsResponse {
-  project_id: number
-  title: string
-  ai_run_id: number
-  story_elements: StoryElementsSnapshot
 }
 
 export interface ScriptVersion {
@@ -179,13 +138,6 @@ export interface AIRun {
   error_message: string
   duration_ms: number | null
   created_at: string
-}
-
-export interface ProjectScriptYamlResponse {
-  project_id: number
-  title: string
-  ai_run_id: number
-  script_version: ScriptVersion
 }
 
 export interface ProjectScriptVersionResponse {
@@ -242,64 +194,22 @@ export async function parseProjectChapters(
   })
 }
 
-export async function extractProjectStoryElements(
+export async function startProjectStoryElementsJob(
   projectId: number,
-): Promise<ProjectStoryElementsResponse> {
-  return requestJson(`/api/projects/${projectId}/story-elements`, { method: 'POST' })
-}
-
-export async function analyzeProjectChapters(
-  projectId: number,
-): Promise<ProjectChapterAnalysesResponse> {
-  return requestJson(`/api/projects/${projectId}/chapter-analyses`, { method: 'POST' })
+): Promise<ProjectAITaskJobResponse> {
+  return requestJson(`/api/projects/${projectId}/story-elements/jobs`, { method: 'POST' })
 }
 
 export async function startProjectChapterAnalysisJob(
   projectId: number,
-): Promise<ProjectChapterAnalysisJobResponse> {
+): Promise<ProjectAITaskJobResponse> {
   return requestJson(`/api/projects/${projectId}/chapter-analyses/jobs`, { method: 'POST' })
 }
 
-export async function streamProjectChapterAnalyses(
+export async function startProjectScriptYamlJob(
   projectId: number,
-  onEvent: (event: ChapterAnalysisStreamEvent) => void,
-): Promise<void> {
-  const token = getAuthToken()
-  const response = await fetch(`/api/projects/${projectId}/chapter-analyses/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response))
-  }
-  if (!response.body) {
-    throw new Error('浏览器不支持读取 AI 实时事件流')
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-    buffer = consumeSseBuffer(buffer, onEvent)
-  }
-
-  buffer += decoder.decode()
-  consumeSseBuffer(`${buffer}\n\n`, onEvent)
-}
-
-export async function generateProjectScriptYaml(
-  projectId: number,
-): Promise<ProjectScriptYamlResponse> {
-  return requestJson(`/api/projects/${projectId}/script-yaml`, { method: 'POST' })
+): Promise<ProjectAITaskJobResponse> {
+  return requestJson(`/api/projects/${projectId}/script-yaml/jobs`, { method: 'POST' })
 }
 
 export async function saveProjectScriptVersion(
@@ -310,51 +220,4 @@ export async function saveProjectScriptVersion(
     method: 'POST',
     body: JSON.stringify(payload),
   })
-}
-
-async function readErrorMessage(response: Response): Promise<string> {
-  const text = await response.text()
-  if (!text) return '请求失败'
-
-  try {
-    const payload = JSON.parse(text) as { detail?: string }
-    return payload.detail ?? text
-  } catch {
-    return text
-  }
-}
-
-function consumeSseBuffer(
-  buffer: string,
-  onEvent: (event: ChapterAnalysisStreamEvent) => void,
-): string {
-  let remaining = buffer
-  let boundary = remaining.indexOf('\n\n')
-
-  while (boundary !== -1) {
-    const rawMessage = remaining.slice(0, boundary)
-    remaining = remaining.slice(boundary + 2)
-    const event = parseSseMessage(rawMessage)
-    if (event) {
-      onEvent(event)
-      if (event.type === 'error') {
-        throw new Error(event.message)
-      }
-    }
-    boundary = remaining.indexOf('\n\n')
-  }
-
-  return remaining
-}
-
-function parseSseMessage(rawMessage: string): ChapterAnalysisStreamEvent | undefined {
-  const dataLines = rawMessage
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart())
-
-  if (dataLines.length === 0) return undefined
-
-  return JSON.parse(dataLines.join('\n')) as ChapterAnalysisStreamEvent
 }

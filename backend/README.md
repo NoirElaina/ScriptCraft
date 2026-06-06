@@ -12,4 +12,5 @@ uv run python main.py
 ## 接口
 
 - `GET /api/health`：健康检查。
-- `POST /api/novels/chapters`：解析小说章节，要求至少 3 个章节。
+- `/api/auth/*`：注册、登录和当前用户信息。
+- `/api/projects/*`：项目、章节、AI 后台任务、剧本版本管理。

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Iterator
+from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import delete, func, select
@@ -22,15 +22,12 @@ from story_elements import StoryElementExtractor
 from .schemas import (
     AIRunResponse,
     ChapterAnalysisItemResponse,
-    ProjectChapterAnalysisJobResponse,
+    ProjectAITaskJobResponse,
     ChapterItemResponse,
-    ProjectChapterAnalysesResponse,
     ProjectChaptersResponse,
     ProjectResponse,
-    ProjectScriptYamlResponse,
     ProjectScriptVersionRequest,
     ProjectScriptVersionResponse,
-    ProjectStoryElementsResponse,
     ProjectWorkspaceResponse,
     ScriptVersionResponse,
     StoryElementsSnapshotResponse,
@@ -39,7 +36,6 @@ from .service import ProjectNotFoundError, assign_owner_if_needed, get_project
 
 
 ModelFactory = Callable[[], BaseChatModel]
-ProjectPipelineEvent = dict[str, Any]
 
 
 class ProjectPipelineError(RuntimeError):
@@ -47,8 +43,8 @@ class ProjectPipelineError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class PreparedChapterAnalysisJob:
-    response: ProjectChapterAnalysisJobResponse
+class PreparedAITaskJob:
+    response: ProjectAITaskJobResponse
     should_start: bool
 
 
@@ -94,77 +90,16 @@ def parse_and_save_chapters(
     )
 
 
-def analyze_and_save_chapters(
-    session: Session,
-    project_id: int,
-    owner_id: int,
-    model_factory: ModelFactory = create_chat_model_from_env,
-) -> ProjectChapterAnalysesResponse:
-    project = get_project(session, project_id, owner_id)
-    assign_owner_if_needed(project, owner_id)
-    chapters = _require_chapters(session, project)
-    input_payload = {
-        "title": project.title,
-        "chapters": [
-            {
-                "id": chapter.chapter_key,
-                "index": chapter.chapter_index,
-                "heading": chapter.heading,
-                "title": chapter.title,
-            }
-            for chapter in chapters
-        ],
-    }
-    ai_run = _create_ai_run(session, project.id, "chapter_analysis", input_payload)
-    started_at = perf_counter()
-
-    try:
-        model = model_factory()
-        analyzer = ChapterAnalyzer(model)
-        analyses = [
-            _build_chapter_analysis(project.id, chapter, analyzer.analyze(project.title, _chapter_payload(chapter)))
-            for chapter in chapters
-        ]
-    except (LLMConfigError, LLMResponseError) as exc:
-        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
-        session.commit()
-        raise
-
-    session.execute(delete(ChapterAnalysis).where(ChapterAnalysis.project_id == project.id))
-    project.status = "chapter_analyses_ready"
-    session.add_all(analyses)
-    session.flush()
-    _finish_ai_run(
-        session,
-        ai_run,
-        "succeeded",
-        started_at,
-        output_payload={"chapter_analyses": [analysis.analysis for analysis in analyses]},
-    )
-    session.commit()
-
-    chapter_analyses = _list_chapter_analyses(session, project.id)
-    return ProjectChapterAnalysesResponse(
-        project_id=project.id,
-        title=project.title,
-        ai_run_id=ai_run.id,
-        chapter_analyses=[_chapter_analysis_response(analysis) for analysis in chapter_analyses],
-    )
-
-
 def prepare_chapter_analysis_job(
     session: Session,
     project_id: int,
     owner_id: int,
-) -> PreparedChapterAnalysisJob:
-    project = get_project(session, project_id, owner_id)
-    assign_owner_if_needed(project, owner_id)
-    chapters = _require_chapters(session, project)
-
-    running_ai_run = _latest_running_ai_run(session, project.id, "chapter_analysis")
+) -> PreparedAITaskJob:
+    project = _get_project_for_ai_task(session, project_id, owner_id)
+    running_ai_run = _running_ai_run_for_task_or_raise(session, project, "chapter_analysis")
     if running_ai_run:
-        return PreparedChapterAnalysisJob(
-            response=ProjectChapterAnalysisJobResponse(
+        return PreparedAITaskJob(
+            response=ProjectAITaskJobResponse(
                 project_id=project.id,
                 title=project.title,
                 ai_run=AIRunResponse.model_validate(running_ai_run),
@@ -172,12 +107,13 @@ def prepare_chapter_analysis_job(
             should_start=False,
         )
 
+    chapters = _require_chapters(session, project)
     session.execute(delete(ChapterAnalysis).where(ChapterAnalysis.project_id == project.id))
     project.status = "chapter_analysis_running"
     ai_run = _create_ai_run(session, project.id, "chapter_analysis", _chapter_analysis_input_payload(project, chapters))
 
-    return PreparedChapterAnalysisJob(
-        response=ProjectChapterAnalysisJobResponse(
+    return PreparedAITaskJob(
+        response=ProjectAITaskJobResponse(
             project_id=project.id,
             title=project.title,
             ai_run=AIRunResponse.model_validate(ai_run),
@@ -229,203 +165,160 @@ def run_chapter_analysis_job(
             raise
 
 
-def stream_analyze_and_save_chapters(
+def prepare_story_elements_job(
     session: Session,
     project_id: int,
     owner_id: int,
-    model_factory: ModelFactory = create_chat_model_from_env,
-) -> Iterator[ProjectPipelineEvent]:
-    project = get_project(session, project_id, owner_id)
-    assign_owner_if_needed(project, owner_id)
-    chapters = _require_chapters(session, project)
-    input_payload = {
-        "title": project.title,
-        "chapters": [
-            {
-                "id": chapter.chapter_key,
-                "index": chapter.chapter_index,
-                "heading": chapter.heading,
-                "title": chapter.title,
-            }
-            for chapter in chapters
-        ],
-    }
-    project.status = "chapter_analysis_running"
-    ai_run = _create_ai_run(session, project.id, "chapter_analysis", input_payload)
-    started_at = perf_counter()
-    output_payloads: list[dict[str, Any]] = []
+) -> PreparedAITaskJob:
+    project = _get_project_for_ai_task(session, project_id, owner_id)
+    running_ai_run = _running_ai_run_for_task_or_raise(session, project, "story_elements")
+    if running_ai_run:
+        return PreparedAITaskJob(
+            response=ProjectAITaskJobResponse(
+                project_id=project.id,
+                title=project.title,
+                ai_run=AIRunResponse.model_validate(running_ai_run),
+            ),
+            should_start=False,
+        )
 
-    try:
-        yield {
-            "type": "started",
-            "project_id": project.id,
-            "title": project.title,
-            "ai_run_id": ai_run.id,
-            "total": len(chapters),
-            "message": f"开始分析 {len(chapters)} 个章节",
-        }
-
-        model = model_factory()
-        analyzer = ChapterAnalyzer(model)
-
-        for position, chapter in enumerate(chapters, start=1):
-            yield {
-                "type": "chapter_started",
-                "project_id": project.id,
-                "ai_run_id": ai_run.id,
-                "chapter": _chapter_brief(chapter),
-                "progress": {"current": position, "total": len(chapters)},
-                "message": f"正在分析第 {chapter.chapter_index} 章：{chapter.title}",
-            }
-
-            analysis_payload = analyzer.analyze(project.title, _chapter_payload(chapter))
-            output_payloads.append(analysis_payload)
-            chapter_analysis = _save_chapter_analysis(session, project.id, chapter, analysis_payload)
-            session.flush()
-            session.refresh(chapter_analysis)
-            session.commit()
-
-            yield {
-                "type": "chapter_completed",
-                "project_id": project.id,
-                "ai_run_id": ai_run.id,
-                "chapter_analysis": _chapter_analysis_response(chapter_analysis).model_dump(mode="json"),
-                "progress": {"current": position, "total": len(chapters)},
-                "message": f"第 {chapter.chapter_index} 章分析完成",
-            }
-    except (LLMConfigError, LLMResponseError) as exc:
-        project.status = "chapter_analysis_failed"
-        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
-        session.commit()
-        yield {
-            "type": "error",
-            "project_id": project.id,
-            "ai_run_id": ai_run.id,
-            "message": str(exc),
-        }
-        return
-
-    project.status = "chapter_analyses_ready"
-    _finish_ai_run(
-        session,
-        ai_run,
-        "succeeded",
-        started_at,
-        output_payload={"chapter_analyses": output_payloads},
-    )
-    session.commit()
-    chapter_analyses = _list_chapter_analyses(session, project.id)
-
-    yield {
-        "type": "completed",
-        "project_id": project.id,
-        "title": project.title,
-        "ai_run_id": ai_run.id,
-        "chapter_analyses": [
-            _chapter_analysis_response(analysis).model_dump(mode="json") for analysis in chapter_analyses
-        ],
-        "message": "全部章节分析完成",
-    }
-
-
-def extract_and_save_story_elements(
-    session: Session,
-    project_id: int,
-    owner_id: int,
-    model_factory: ModelFactory = create_chat_model_from_env,
-) -> ProjectStoryElementsResponse:
-    project = get_project(session, project_id, owner_id)
-    assign_owner_if_needed(project, owner_id)
     chapters = _require_chapter_analysis_contexts(session, project)
-    input_payload = {"title": project.title, "chapters": chapters}
-    ai_run = _create_ai_run(session, project.id, "story_elements", input_payload)
-    started_at = perf_counter()
-
-    try:
-        model = model_factory()
-        result = StoryElementExtractor(model).extract(project.title, input_payload["chapters"])
-    except (LLMConfigError, LLMResponseError) as exc:
-        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
-        session.commit()
-        raise
-
-    story_element = StoryElement(
-        project_id=project.id,
-        characters=result["characters"],
-        locations=result["locations"],
-        events=result["events"],
+    project.status = "story_elements_running"
+    ai_run = _create_ai_run(
+        session,
+        project.id,
+        "story_elements",
+        _story_elements_input_payload(project, chapters),
     )
-    project.status = "story_elements_ready"
-    session.add(story_element)
-    session.flush()
-    _finish_ai_run(session, ai_run, "succeeded", started_at, output_payload=result)
-    session.commit()
-    session.refresh(story_element)
 
-    return ProjectStoryElementsResponse(
-        project_id=project.id,
-        title=project.title,
-        ai_run_id=ai_run.id,
-        story_elements=_story_elements_response(story_element),
+    return PreparedAITaskJob(
+        response=ProjectAITaskJobResponse(
+            project_id=project.id,
+            title=project.title,
+            ai_run=AIRunResponse.model_validate(ai_run),
+        ),
+        should_start=True,
     )
 
 
-def generate_and_save_script_yaml(
-    session: Session,
+def run_story_elements_job(
+    ai_run_id: int,
     project_id: int,
     owner_id: int,
     model_factory: ModelFactory = create_chat_model_from_env,
-) -> ProjectScriptYamlResponse:
-    project = get_project(session, project_id, owner_id)
-    assign_owner_if_needed(project, owner_id)
+) -> None:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        ai_run = session.get(AIRun, ai_run_id)
+        if ai_run is None or ai_run.status != "running":
+            return
+
+        started_at = perf_counter()
+
+        try:
+            project = get_project(session, project_id, owner_id)
+            chapters = _require_chapter_analysis_contexts(session, project)
+            model = model_factory()
+            result = StoryElementExtractor(model).extract(project.title, chapters)
+
+            story_element = StoryElement(
+                project_id=project.id,
+                characters=result["characters"],
+                locations=result["locations"],
+                events=result["events"],
+            )
+            project.status = "story_elements_ready"
+            session.add(story_element)
+            session.flush()
+            _finish_ai_run(session, ai_run, "succeeded", started_at, output_payload=result)
+            session.commit()
+        except (ProjectNotFoundError, ProjectPipelineError, LLMConfigError, LLMResponseError) as exc:
+            _mark_ai_task_job_failed(session, ai_run, "story_elements_failed", started_at, str(exc))
+        except Exception as exc:
+            _mark_ai_task_job_failed(session, ai_run, "story_elements_failed", started_at, f"故事元素抽取任务异常：{exc}")
+            raise
+
+
+def prepare_script_yaml_job(
+    session: Session,
+    project_id: int,
+    owner_id: int,
+) -> PreparedAITaskJob:
+    project = _get_project_for_ai_task(session, project_id, owner_id)
+    running_ai_run = _running_ai_run_for_task_or_raise(session, project, "script_yaml")
+    if running_ai_run:
+        return PreparedAITaskJob(
+            response=ProjectAITaskJobResponse(
+                project_id=project.id,
+                title=project.title,
+                ai_run=AIRunResponse.model_validate(running_ai_run),
+            ),
+            should_start=False,
+        )
+
     chapters = _require_chapter_analysis_contexts(session, project)
     story_element = _require_latest_story_elements(session, project)
-    characters = story_element.characters
-    locations = story_element.locations
-    events = story_element.events
-    input_payload = {
-        "title": project.title,
-        "chapters": chapters,
-        "characters": characters,
-        "locations": locations,
-        "events": events,
-    }
-    ai_run = _create_ai_run(session, project.id, "script_yaml", input_payload)
-    started_at = perf_counter()
+    project.status = "script_yaml_running"
+    ai_run = _create_ai_run(
+        session,
+        project.id,
+        "script_yaml",
+        _script_yaml_input_payload(project, chapters, story_element),
+    )
 
-    try:
-        model = model_factory()
-        yaml_content = ScriptYamlGenerator(model).generate(
+    return PreparedAITaskJob(
+        response=ProjectAITaskJobResponse(
+            project_id=project.id,
             title=project.title,
-            chapters=input_payload["chapters"],
-            characters=characters,
-            locations=locations,
-            events=events,
-        )
-    except (LLMConfigError, LLMResponseError) as exc:
-        _finish_ai_run(session, ai_run, "failed", started_at, error_message=str(exc))
-        session.commit()
-        raise
-
-    script_version = ScriptVersion(
-        project_id=project.id,
-        version_name=f"AI 初稿 {_next_script_version_index(session, project.id)}",
-        schema_version="1.0",
-        yaml_content=yaml_content,
+            ai_run=AIRunResponse.model_validate(ai_run),
+        ),
+        should_start=True,
     )
-    project.status = "script_ready"
-    session.add(script_version)
-    session.flush()
-    _finish_ai_run(session, ai_run, "succeeded", started_at, output_payload={"yaml": yaml_content})
-    session.commit()
-    session.refresh(script_version)
 
-    return ProjectScriptYamlResponse(
-        project_id=project.id,
-        title=project.title,
-        ai_run_id=ai_run.id,
-        script_version=ScriptVersionResponse.model_validate(script_version),
-    )
+
+def run_script_yaml_job(
+    ai_run_id: int,
+    project_id: int,
+    owner_id: int,
+    model_factory: ModelFactory = create_chat_model_from_env,
+) -> None:
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        ai_run = session.get(AIRun, ai_run_id)
+        if ai_run is None or ai_run.status != "running":
+            return
+
+        started_at = perf_counter()
+
+        try:
+            project = get_project(session, project_id, owner_id)
+            chapters = _require_chapter_analysis_contexts(session, project)
+            story_element = _require_latest_story_elements(session, project)
+            model = model_factory()
+            yaml_content = ScriptYamlGenerator(model).generate(
+                title=project.title,
+                chapters=chapters,
+                characters=story_element.characters,
+                locations=story_element.locations,
+                events=story_element.events,
+            )
+
+            script_version = ScriptVersion(
+                project_id=project.id,
+                version_name=f"AI 初稿 {_next_script_version_index(session, project.id)}",
+                schema_version="1.0",
+                yaml_content=yaml_content,
+            )
+            project.status = "script_ready"
+            session.add(script_version)
+            session.flush()
+            _finish_ai_run(session, ai_run, "succeeded", started_at, output_payload={"yaml": yaml_content})
+            session.commit()
+        except (ProjectNotFoundError, ProjectPipelineError, LLMConfigError, LLMResponseError) as exc:
+            _mark_ai_task_job_failed(session, ai_run, "script_yaml_failed", started_at, str(exc))
+        except Exception as exc:
+            _mark_ai_task_job_failed(session, ai_run, "script_yaml_failed", started_at, f"剧本 YAML 生成任务异常：{exc}")
+            raise
 
 
 def save_script_version(
@@ -488,6 +381,15 @@ def _list_chapters(session: Session, project_id: int) -> list[Chapter]:
     )
 
 
+def _get_project_for_ai_task(session: Session, project_id: int, owner_id: int) -> Project:
+    project = session.scalar(select(Project).where(Project.id == project_id).with_for_update())
+    if project is None or (project.owner_id is not None and project.owner_id != owner_id):
+        raise ProjectNotFoundError(f"项目不存在：{project_id}")
+
+    assign_owner_if_needed(project, owner_id)
+    return project
+
+
 def _require_chapters(session: Session, project: Project) -> list[Chapter]:
     chapters = _list_chapters(session, project.id)
     if len(chapters) < 3:
@@ -510,16 +412,52 @@ def _chapter_analysis_input_payload(project: Project, chapters: list[Chapter]) -
     }
 
 
-def _latest_running_ai_run(session: Session, project_id: int, task_type: str) -> AIRun | None:
+def _story_elements_input_payload(project: Project, chapters: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"title": project.title, "chapters": chapters}
+
+
+def _script_yaml_input_payload(
+    project: Project,
+    chapters: list[dict[str, Any]],
+    story_element: StoryElement,
+) -> dict[str, Any]:
+    return {
+        "title": project.title,
+        "chapters": chapters,
+        "characters": story_element.characters,
+        "locations": story_element.locations,
+        "events": story_element.events,
+    }
+
+
+def _running_ai_run_for_task_or_raise(session: Session, project: Project, task_type: str) -> AIRun | None:
+    ai_run = _latest_running_project_ai_run(session, project.id)
+    if ai_run is None:
+        return None
+    if ai_run.task_type == task_type:
+        return ai_run
+
+    raise ProjectPipelineError(f"当前项目已有 AI 任务运行中：{_task_type_label(ai_run.task_type)}")
+
+
+def _latest_running_project_ai_run(session: Session, project_id: int) -> AIRun | None:
     return session.scalar(
         select(AIRun)
         .where(
             AIRun.project_id == project_id,
-            AIRun.task_type == task_type,
             AIRun.status == "running",
         )
         .order_by(AIRun.created_at.desc(), AIRun.id.desc())
     )
+
+
+def _task_type_label(task_type: str) -> str:
+    labels = {
+        "chapter_analysis": "章节分析",
+        "story_elements": "故事元素抽取",
+        "script_yaml": "剧本 YAML 生成",
+    }
+    return labels.get(task_type, task_type)
 
 
 def _list_chapter_analyses(session: Session, project_id: int) -> list[ChapterAnalysis]:
@@ -582,15 +520,6 @@ def _chapter_payload(chapter: Chapter) -> dict[str, Any]:
 
 def _chapter_response(chapter: Chapter) -> ChapterItemResponse:
     return ChapterItemResponse(**_chapter_payload(chapter))
-
-
-def _chapter_brief(chapter: Chapter) -> dict[str, Any]:
-    return {
-        "id": chapter.chapter_key,
-        "index": chapter.chapter_index,
-        "heading": chapter.heading,
-        "title": chapter.title,
-    }
 
 
 def _build_chapter_analysis(project_id: int, chapter: Chapter, analysis: dict[str, Any]) -> ChapterAnalysis:
@@ -689,9 +618,19 @@ def _mark_chapter_analysis_job_failed(
     started_at: float,
     error_message: str,
 ) -> None:
+    _mark_ai_task_job_failed(session, ai_run, "chapter_analysis_failed", started_at, error_message)
+
+
+def _mark_ai_task_job_failed(
+    session: Session,
+    ai_run: AIRun,
+    project_status: str,
+    started_at: float,
+    error_message: str,
+) -> None:
     project = session.get(Project, ai_run.project_id) if ai_run.project_id is not None else None
     if project is not None:
-        project.status = "chapter_analysis_failed"
+        project.status = project_status
 
     _finish_ai_run(session, ai_run, "failed", started_at, error_message=error_message)
     session.commit()

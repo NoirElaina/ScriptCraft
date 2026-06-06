@@ -39,6 +39,7 @@ const props = defineProps<{
   isAnalyzingChapters: boolean
   isExtracting: boolean
   isGeneratingYaml: boolean
+  isAiTaskRunning: boolean
   isSavingYaml: boolean
 }>()
 
@@ -104,7 +105,7 @@ const emit = defineEmits<{
                     </p>
                   </div>
                   <Button
-                    :disabled="isAnalyzingChapters || chaptersLength < 3"
+                    :disabled="isAiTaskRunning || chaptersLength < 3"
                     class="shrink-0"
                     @click="emit('analyzeChapters')"
                   >
@@ -149,7 +150,7 @@ const emit = defineEmits<{
                     </p>
                   </div>
                   <Button
-                    :disabled="isExtracting || chapterAnalysesLength < chaptersLength || chaptersLength < 3"
+                    :disabled="isAiTaskRunning || chapterAnalysesLength < chaptersLength || chaptersLength < 3"
                     class="shrink-0"
                     @click="emit('extractStoryElements')"
                   >
@@ -173,7 +174,7 @@ const emit = defineEmits<{
                     </p>
                   </div>
                   <Button
-                    :disabled="isGeneratingYaml || !storyElements"
+                    :disabled="isAiTaskRunning || !storyElements"
                     class="shrink-0"
                     @click="emit('generateScriptYaml')"
                   >
@@ -279,7 +280,7 @@ const emit = defineEmits<{
             :script-yaml="scriptYaml"
             :project-title="projectTitle"
             :script-version-name="scriptVersionName"
-            :has-story-elements="Boolean(storyElements)"
+            :has-story-elements="Boolean(storyElements) && !isAiTaskRunning"
             :is-generating-yaml="isGeneratingYaml"
             :is-saving-yaml="isSavingYaml"
             @generate="emit('generateScriptYaml')"

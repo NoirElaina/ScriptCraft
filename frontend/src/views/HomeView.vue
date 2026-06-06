@@ -12,13 +12,13 @@ import { getAuthToken } from '@/api/client'
 import {
   createProject,
   deleteProject,
-  extractProjectStoryElements,
-  generateProjectScriptYaml,
   getProjectWorkspace,
   listProjects,
   parseProjectChapters,
   saveProjectScriptVersion,
   startProjectChapterAnalysisJob,
+  startProjectScriptYamlJob,
+  startProjectStoryElementsJob,
   updateProject,
   type AIRun,
   type ChapterAnalysis,
@@ -104,7 +104,32 @@ const isBackendAnalyzingChapters = computed(() => {
     aiRuns.value.some((run) => run.task_type === 'chapter_analysis' && run.status === 'running')
   )
 })
+const isBackendExtractingStoryElements = computed(() => {
+  return (
+    currentProject.value?.status === 'story_elements_running' ||
+    aiRuns.value.some((run) => run.task_type === 'story_elements' && run.status === 'running')
+  )
+})
+const isBackendGeneratingScriptYaml = computed(() => {
+  return (
+    currentProject.value?.status === 'script_yaml_running' ||
+    aiRuns.value.some((run) => run.task_type === 'script_yaml' && run.status === 'running')
+  )
+})
 const isChapterAnalysisBusy = computed(() => isAnalyzingChapters.value || isBackendAnalyzingChapters.value)
+const isStoryElementsBusy = computed(() => isExtracting.value || isBackendExtractingStoryElements.value)
+const isScriptYamlBusy = computed(() => isGeneratingYaml.value || isBackendGeneratingScriptYaml.value)
+const isLocalAiTaskRunning = computed(() => {
+  return isAnalyzingChapters.value || isExtracting.value || isGeneratingYaml.value
+})
+const isBackendAiTaskRunning = computed(() => {
+  return (
+    isBackendAnalyzingChapters.value ||
+    isBackendExtractingStoryElements.value ||
+    isBackendGeneratingScriptYaml.value
+  )
+})
+const isAiTaskRunning = computed(() => isLocalAiTaskRunning.value || isBackendAiTaskRunning.value)
 
 const editorErrorMessage = computed(() => {
   return workspaceErrorMessage.value || pipelineErrorMessage.value
@@ -122,7 +147,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  [() => currentProject.value?.id, isBackendAnalyzingChapters],
+  [() => currentProject.value?.id, isBackendAiTaskRunning],
   ([projectId, isRunning]) => {
     stopWorkspacePolling()
     if (projectId && isRunning) {
@@ -365,14 +390,14 @@ async function handleExtractStoryElements() {
 
   pipelineErrorMessage.value = ''
   isExtracting.value = true
+  activeFlowTab.value = 'pipeline'
 
   try {
-    await extractProjectStoryElements(project.id)
-    await refreshWorkspace()
-    activeFlowTab.value = 'pipeline'
+    await startProjectStoryElementsJob(project.id)
+    await refreshWorkspaceSnapshot(project.id)
+    startWorkspacePolling(project.id)
   } catch (error) {
     pipelineErrorMessage.value = error instanceof Error ? error.message : '故事元素抽取失败'
-    await refreshWorkspace()
   } finally {
     isExtracting.value = false
   }
@@ -386,13 +411,11 @@ async function handleGenerateScriptYaml() {
   isGeneratingYaml.value = true
 
   try {
-    await generateProjectScriptYaml(project.id)
-    await refreshWorkspace()
-    activeFlowTab.value = 'yaml'
-    activeYamlTab.value = 'preview'
+    await startProjectScriptYamlJob(project.id)
+    await refreshWorkspaceSnapshot(project.id)
+    startWorkspacePolling(project.id)
   } catch (error) {
     pipelineErrorMessage.value = error instanceof Error ? error.message : '剧本 YAML 生成失败'
-    await refreshWorkspace()
   } finally {
     isGeneratingYaml.value = false
   }
@@ -676,8 +699,9 @@ function forgetActiveProject(projectId?: number) {
             :chapter-analysis-logs="chapterAnalysisLogs"
             :is-loading-workspace="isLoadingWorkspace"
             :is-analyzing-chapters="isChapterAnalysisBusy"
-            :is-extracting="isExtracting"
-            :is-generating-yaml="isGeneratingYaml"
+            :is-extracting="isStoryElementsBusy"
+            :is-generating-yaml="isScriptYamlBusy"
+            :is-ai-task-running="isAiTaskRunning"
             :is-saving-yaml="isSavingYaml"
             @refresh="refreshWorkspace"
             @analyze-chapters="handleAnalyzeProjectChapters"

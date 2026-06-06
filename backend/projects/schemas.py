@@ -80,13 +80,6 @@ class ChapterAnalysisItemResponse(BaseModel):
     updated_at: datetime
 
 
-class ProjectChapterAnalysesResponse(BaseModel):
-    project_id: int
-    title: str
-    ai_run_id: int
-    chapter_analyses: list[ChapterAnalysisItemResponse]
-
-
 class CharacterItemResponse(BaseModel):
     id: str
     name: str
@@ -118,13 +111,6 @@ class StoryElementsSnapshotResponse(BaseModel):
     created_at: datetime
 
 
-class ProjectStoryElementsResponse(BaseModel):
-    project_id: int
-    title: str
-    ai_run_id: int
-    story_elements: StoryElementsSnapshotResponse
-
-
 class ScriptVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -135,13 +121,6 @@ class ScriptVersionResponse(BaseModel):
     yaml_content: str
     created_at: datetime
     updated_at: datetime
-
-
-class ProjectScriptYamlResponse(BaseModel):
-    project_id: int
-    title: str
-    ai_run_id: int
-    script_version: ScriptVersionResponse
 
 
 class ProjectScriptVersionRequest(BaseModel):
@@ -169,7 +148,7 @@ class AIRunResponse(BaseModel):
     created_at: datetime
 
 
-class ProjectChapterAnalysisJobResponse(BaseModel):
+class ProjectAITaskJobResponse(BaseModel):
     project_id: int
     title: str
     ai_run: AIRunResponse
