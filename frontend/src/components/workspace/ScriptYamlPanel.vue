@@ -1,27 +1,45 @@
 <script setup lang="ts">
-import { toRef } from 'vue'
-import { BookOpen, Loader2, MapPin, Sparkles, Users } from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { BookOpen, Download, Loader2, MapPin, Save, Sparkles, Users } from '@lucide/vue'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { useScriptYamlDocument } from '@/composables/useScriptYamlDocument'
 
 const props = defineProps<{
   scriptYaml: string
+  projectTitle: string
+  scriptVersionName?: string
   hasStoryElements: boolean
   isGeneratingYaml: boolean
+  isSavingYaml: boolean
 }>()
 
 const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 
 const emit = defineEmits<{
   generate: []
+  save: [yamlContent: string, versionName: string]
 }>()
 
+const editableYaml = ref('')
+const versionName = ref('手动编辑版')
+
+watch(
+  () => props.scriptYaml,
+  (value) => {
+    editableYaml.value = value
+    versionName.value = props.scriptVersionName ? `${props.scriptVersionName} 编辑版` : '手动编辑版'
+  },
+  { immediate: true },
+)
+
 const {
-  scriptParseError,
+  scriptValidationIssues,
   scriptCharacters,
   scriptLocations,
   scriptScenes,
@@ -31,32 +49,69 @@ const {
   eventSummary,
   beatTypeLabel,
   beatTypeClass,
-} = useScriptYamlDocument(toRef(props, 'scriptYaml'))
+} = useScriptYamlDocument(editableYaml)
+
+const hasYaml = computed(() => Boolean(editableYaml.value.trim()))
+const hasValidationIssue = computed(() => scriptValidationIssues.value.length > 0)
+const canSaveYaml = computed(() => hasYaml.value && !hasValidationIssue.value && !props.isSavingYaml)
+const canDownloadYaml = computed(() => hasYaml.value && !hasValidationIssue.value)
+
+function saveYamlVersion() {
+  if (!canSaveYaml.value) return
+  emit('save', editableYaml.value, versionName.value.trim() || '手动编辑版')
+}
+
+function downloadYaml() {
+  if (!canDownloadYaml.value) return
+
+  const blob = new Blob([editableYaml.value], { type: 'text/yaml;charset=utf-8' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `${safeFileName(props.projectTitle || 'scriptcraft-script')}.yaml`
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+function safeFileName(value: string): string {
+  const name = value.trim().replace(/[\\/:*?"<>|]+/g, '-')
+  return name || 'scriptcraft-script'
+}
 </script>
 
 <template>
   <div class="flex h-full min-h-0 flex-col rounded-lg border bg-background p-4">
     <div class="shrink-0 flex items-center justify-between gap-3">
-      <p class="text-sm font-medium">AI 剧本 YAML</p>
-      <Button size="sm" :disabled="isGeneratingYaml || !hasStoryElements" @click="emit('generate')">
-        <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
-        <Sparkles v-else class="size-4" />
-        生成
-      </Button>
+      <div>
+        <p class="text-sm font-medium">AI 剧本 YAML</p>
+        <p class="mt-1 text-xs text-muted-foreground">
+          {{ props.scriptVersionName ?? '暂无已保存版本' }}
+        </p>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="outline" :disabled="!canDownloadYaml" @click="downloadYaml">
+          <Download class="size-4" />
+          导出
+        </Button>
+        <Button size="sm" :disabled="isGeneratingYaml || !hasStoryElements" @click="emit('generate')">
+          <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
+          <Sparkles v-else class="size-4" />
+          生成
+        </Button>
+      </div>
     </div>
 
-    <Tabs v-if="scriptYaml" v-model="activeYamlTab" class="mt-4 flex min-h-0 flex-1 flex-col">
+    <Tabs v-if="hasYaml" v-model="activeYamlTab" class="mt-4 flex min-h-0 flex-1 flex-col">
       <TabsList class="grid w-full shrink-0 grid-cols-2">
         <TabsTrigger value="preview">预览</TabsTrigger>
-        <TabsTrigger value="source">源码</TabsTrigger>
+        <TabsTrigger value="source">编辑</TabsTrigger>
       </TabsList>
 
       <TabsContent value="preview" class="mt-4 min-h-0 flex-1 overflow-hidden">
         <div
-          v-if="scriptParseError"
+          v-if="hasValidationIssue"
           class="flex h-full items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
         >
-          YAML 解析失败，请查看源码。
+          {{ scriptValidationIssues[0] }}，请切换到编辑模式修正。
         </div>
 
         <ScrollArea v-else class="h-full pr-3">
@@ -206,10 +261,30 @@ const {
       </TabsContent>
 
       <TabsContent value="source" class="mt-4 min-h-0 flex-1 overflow-hidden">
-        <pre
-          class="h-full overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/20 p-3 text-xs leading-6 text-muted-foreground"
-          >{{ scriptYaml }}</pre
-        >
+        <div class="flex h-full min-h-0 flex-col gap-3">
+          <div class="grid shrink-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Input v-model="versionName" placeholder="版本名称" />
+            <Button :disabled="!canSaveYaml" @click="saveYamlVersion">
+              <Loader2 v-if="isSavingYaml" class="size-4 animate-spin" />
+              <Save v-else class="size-4" />
+              保存版本
+            </Button>
+          </div>
+
+          <div
+            v-if="hasValidationIssue"
+            class="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+          >
+            <p class="font-medium">YAML 解析或结构校验失败，修正后再保存。</p>
+            <p class="mt-1 text-xs leading-5">{{ scriptValidationIssues[0] }}</p>
+          </div>
+
+          <Textarea
+            v-model="editableYaml"
+            class="min-h-0 flex-1 resize-none overflow-auto font-mono text-xs leading-6"
+            spellcheck="false"
+          />
+        </div>
       </TabsContent>
     </Tabs>
 

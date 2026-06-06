@@ -16,6 +16,8 @@ from .schemas import (
     ProjectListResponse,
     ProjectResponse,
     ProjectScriptYamlResponse,
+    ProjectScriptVersionRequest,
+    ProjectScriptVersionResponse,
     ProjectStoryElementsResponse,
     ProjectUpdateRequest,
     ProjectWorkspaceResponse,
@@ -181,6 +183,21 @@ def generate_project_script_yaml(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LLMResponseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{project_id}/script-versions", response_model=ProjectScriptVersionResponse)
+def save_project_script_version(
+    project_id: int,
+    request: ProjectScriptVersionRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ProjectScriptVersionResponse:
+    try:
+        return pipeline_service.save_script_version(session, project_id, current_user.id, request)
+    except service.ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

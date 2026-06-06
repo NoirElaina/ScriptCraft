@@ -17,6 +17,7 @@ import {
   getProjectWorkspace,
   listProjects,
   parseProjectChapters,
+  saveProjectScriptVersion,
   streamProjectChapterAnalyses,
   updateProject,
   type AIRun,
@@ -62,6 +63,7 @@ const isParsing = ref(false)
 const isAnalyzingChapters = ref(false)
 const isExtracting = ref(false)
 const isGeneratingYaml = ref(false)
+const isSavingYaml = ref(false)
 const isDeletingProject = ref(false)
 const isCheckingAuth = ref(true)
 const isLoggingOut = ref(false)
@@ -330,6 +332,31 @@ async function handleGenerateScriptYaml() {
   }
 }
 
+async function handleSaveScriptYaml(yamlContent: string, versionName: string) {
+  const project = currentProject.value
+  if (!project) return
+
+  pipelineErrorMessage.value = ''
+  isSavingYaml.value = true
+
+  try {
+    const result = await saveProjectScriptVersion(project.id, {
+      version_name: versionName,
+      yaml_content: yamlContent,
+    })
+    if (workspace.value && workspace.value.project.id === project.id) {
+      workspace.value = { ...workspace.value, script_version: result.script_version }
+    }
+    activeFlowTab.value = 'yaml'
+    activeYamlTab.value = 'preview'
+    await loadProjectList()
+  } catch (error) {
+    pipelineErrorMessage.value = error instanceof Error ? error.message : '剧本 YAML 保存失败'
+  } finally {
+    isSavingYaml.value = false
+  }
+}
+
 function applyWorkspace(result: ProjectWorkspaceResponse) {
   workspace.value = result
   projectTitle.value = result.project.title
@@ -519,6 +546,7 @@ function resetWorkspace() {
             :chapter-analyses-length="chapterAnalyses.length"
             :story-elements="storyElements"
             :script-yaml="scriptYaml"
+            :project-title="currentProject.title"
             :script-version-name="scriptVersionName"
             :ai-runs="aiRuns"
             :chapter-analysis-logs="chapterAnalysisLogs"
@@ -526,10 +554,12 @@ function resetWorkspace() {
             :is-analyzing-chapters="isAnalyzingChapters"
             :is-extracting="isExtracting"
             :is-generating-yaml="isGeneratingYaml"
+            :is-saving-yaml="isSavingYaml"
             @refresh="refreshWorkspace"
             @analyze-chapters="handleAnalyzeProjectChapters"
             @extract-story-elements="handleExtractStoryElements"
             @generate-script-yaml="handleGenerateScriptYaml"
+            @save-script-yaml="handleSaveScriptYaml"
           />
         </div>
       </div>

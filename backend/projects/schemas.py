@@ -144,6 +144,17 @@ class ProjectScriptYamlResponse(BaseModel):
     script_version: ScriptVersionResponse
 
 
+class ProjectScriptVersionRequest(BaseModel):
+    version_name: str = Field(default="手动编辑版", min_length=1, max_length=120)
+    yaml_content: str = Field(min_length=1)
+
+
+class ProjectScriptVersionResponse(BaseModel):
+    project_id: int
+    title: str
+    script_version: ScriptVersionResponse
+
+
 class AIRunResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

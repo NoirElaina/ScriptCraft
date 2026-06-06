@@ -80,9 +80,13 @@ def call_model_node(model: BaseChatModel):
 
 
 def validate_yaml_node(state: ScriptYamlState) -> ScriptYamlState:
-    payload, normalized_yaml = parse_yaml_content(state["raw_yaml"])
+    return {"result": normalize_script_yaml_content(state["raw_yaml"])}
+
+
+def normalize_script_yaml_content(content: Any) -> str:
+    payload, normalized_yaml = parse_yaml_content(content)
     _validate_script_yaml(payload)
-    return {"result": normalized_yaml}
+    return normalized_yaml
 
 
 def build_script_yaml_messages(
