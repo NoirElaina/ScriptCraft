@@ -89,6 +89,12 @@ export interface ProjectChapterAnalysesResponse {
   chapter_analyses: ChapterAnalysis[]
 }
 
+export interface ProjectChapterAnalysisJobResponse {
+  project_id: number
+  title: string
+  ai_run: AIRun
+}
+
 export interface ChapterAnalysisStreamChapter {
   id: string
   index: number
@@ -246,6 +252,12 @@ export async function analyzeProjectChapters(
   projectId: number,
 ): Promise<ProjectChapterAnalysesResponse> {
   return requestJson(`/api/projects/${projectId}/chapter-analyses`, { method: 'POST' })
+}
+
+export async function startProjectChapterAnalysisJob(
+  projectId: number,
+): Promise<ProjectChapterAnalysisJobResponse> {
+  return requestJson(`/api/projects/${projectId}/chapter-analyses/jobs`, { method: 'POST' })
 }
 
 export async function streamProjectChapterAnalyses(

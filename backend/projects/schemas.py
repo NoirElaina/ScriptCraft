@@ -169,6 +169,12 @@ class AIRunResponse(BaseModel):
     created_at: datetime
 
 
+class ProjectChapterAnalysisJobResponse(BaseModel):
+    project_id: int
+    title: str
+    ai_run: AIRunResponse
+
+
 class ProjectWorkspaceResponse(BaseModel):
     project: ProjectResponse
     chapters: list[ChapterItemResponse]
