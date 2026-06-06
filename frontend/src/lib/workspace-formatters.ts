@@ -5,7 +5,11 @@ export function statusLabel(status: string): string {
     chapter_analysis_running: '章节分析中',
     chapter_analysis_failed: '章节分析失败',
     chapter_analyses_ready: '章节分析完成',
+    story_elements_running: '元素抽取中',
+    story_elements_failed: '元素抽取失败',
     story_elements_ready: '元素完成',
+    script_yaml_running: '剧本生成中',
+    script_yaml_failed: '剧本生成失败',
     script_ready: '剧本完成',
   }
   return labels[status] ?? status

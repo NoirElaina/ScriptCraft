@@ -1,29 +1,24 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_session
 from chapter_parser import ChapterParseError
-from llm import LLMConfigError, LLMResponseError
+from llm import LLMResponseError
 from models.user import User
 from . import pipeline_service, service
 from .schemas import (
     ProjectCreateRequest,
-    ProjectChapterAnalysisJobResponse,
-    ProjectChapterAnalysesResponse,
+    ProjectAITaskJobResponse,
     ProjectChaptersRequest,
     ProjectChaptersResponse,
     ProjectListResponse,
     ProjectResponse,
-    ProjectScriptYamlResponse,
     ProjectScriptVersionRequest,
     ProjectScriptVersionResponse,
-    ProjectStoryElementsResponse,
     ProjectUpdateRequest,
     ProjectWorkspaceResponse,
 )
-from .sse import encode_sse_event
 
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -103,31 +98,13 @@ def parse_project_chapters(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{project_id}/chapter-analyses", response_model=ProjectChapterAnalysesResponse)
-def analyze_project_chapters(
-    project_id: int,
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user),
-) -> ProjectChapterAnalysesResponse:
-    try:
-        return pipeline_service.analyze_and_save_chapters(session, project_id, current_user.id)
-    except service.ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except pipeline_service.ProjectPipelineError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@router.post("/{project_id}/chapter-analyses/jobs", response_model=ProjectChapterAnalysisJobResponse)
+@router.post("/{project_id}/chapter-analyses/jobs", response_model=ProjectAITaskJobResponse)
 def start_project_chapter_analysis_job(
     project_id: int,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
-) -> ProjectChapterAnalysisJobResponse:
+) -> ProjectAITaskJobResponse:
     try:
         job = pipeline_service.prepare_chapter_analysis_job(session, project_id, current_user.id)
     except service.ProjectNotFoundError as exc:
@@ -146,69 +123,54 @@ def start_project_chapter_analysis_job(
     return job.response
 
 
-@router.post("/{project_id}/chapter-analyses/stream")
-def stream_analyze_project_chapters(
+@router.post("/{project_id}/story-elements/jobs", response_model=ProjectAITaskJobResponse)
+def start_project_story_elements_job(
     project_id: int,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
-) -> StreamingResponse:
-    def event_stream():
-        try:
-            for event in pipeline_service.stream_analyze_and_save_chapters(session, project_id, current_user.id):
-                yield encode_sse_event(event["type"], event)
-        except service.ProjectNotFoundError as exc:
-            yield encode_sse_event("error", {"message": str(exc), "status_code": 404})
-        except pipeline_service.ProjectPipelineError as exc:
-            yield encode_sse_event("error", {"message": str(exc), "status_code": 400})
-        except LLMConfigError as exc:
-            yield encode_sse_event("error", {"message": str(exc), "status_code": 503})
-        except LLMResponseError as exc:
-            yield encode_sse_event("error", {"message": str(exc), "status_code": 502})
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@router.post("/{project_id}/story-elements", response_model=ProjectStoryElementsResponse)
-def extract_project_story_elements(
-    project_id: int,
-    session: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user),
-) -> ProjectStoryElementsResponse:
+) -> ProjectAITaskJobResponse:
     try:
-        return pipeline_service.extract_and_save_story_elements(session, project_id, current_user.id)
+        job = pipeline_service.prepare_story_elements_job(session, project_id, current_user.id)
     except service.ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except pipeline_service.ProjectPipelineError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if job.should_start:
+        background_tasks.add_task(
+            pipeline_service.run_story_elements_job,
+            job.response.ai_run.id,
+            project_id,
+            current_user.id,
+        )
+
+    return job.response
 
 
-@router.post("/{project_id}/script-yaml", response_model=ProjectScriptYamlResponse)
-def generate_project_script_yaml(
+@router.post("/{project_id}/script-yaml/jobs", response_model=ProjectAITaskJobResponse)
+def start_project_script_yaml_job(
     project_id: int,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
-) -> ProjectScriptYamlResponse:
+) -> ProjectAITaskJobResponse:
     try:
-        return pipeline_service.generate_and_save_script_yaml(session, project_id, current_user.id)
+        job = pipeline_service.prepare_script_yaml_job(session, project_id, current_user.id)
     except service.ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except pipeline_service.ProjectPipelineError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except LLMResponseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if job.should_start:
+        background_tasks.add_task(
+            pipeline_service.run_script_yaml_job,
+            job.response.ai_run.id,
+            project_id,
+            current_user.id,
+        )
+
+    return job.response
 
 
 @router.post("/{project_id}/script-versions", response_model=ProjectScriptVersionResponse)
