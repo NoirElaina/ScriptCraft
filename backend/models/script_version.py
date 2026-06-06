@@ -12,7 +12,7 @@ class ScriptVersion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
     version_name: Mapped[str] = mapped_column(String(120), default="初稿")
-    schema_version: Mapped[str] = mapped_column(String(40), default="1.0")
+    schema_version: Mapped[str] = mapped_column(String(40), default="2.0")
     yaml_content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

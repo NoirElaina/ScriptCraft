@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { BookOpen, Download, Loader2, MapPin, Save, Sparkles, Users } from '@lucide/vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { BookOpen, Clapperboard, Download, Loader2, MapPin, Save, Sparkles, Users } from '@lucide/vue'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useScriptYamlDocument } from '@/composables/useScriptYamlDocument'
+
+const StoryboardPlayerDialog = defineAsyncComponent(() => import('./storyboard/StoryboardPlayerDialog.vue'))
 
 const props = defineProps<{
   scriptYaml: string
@@ -28,6 +30,8 @@ const emit = defineEmits<{
 
 const editableYaml = ref('')
 const versionName = ref('手动编辑版')
+const isStoryboardOpen = ref(false)
+const initialStoryboardSceneId = ref('')
 
 watch(
   () => props.scriptYaml,
@@ -43,6 +47,7 @@ const {
   scriptCharacters,
   scriptLocations,
   scriptScenes,
+  scriptStoryboardScenes,
   metadataValue,
   characterName,
   locationName,
@@ -55,6 +60,9 @@ const hasYaml = computed(() => Boolean(editableYaml.value.trim()))
 const hasValidationIssue = computed(() => scriptValidationIssues.value.length > 0)
 const canSaveYaml = computed(() => hasYaml.value && !hasValidationIssue.value && !props.isSavingYaml)
 const canDownloadYaml = computed(() => hasYaml.value && !hasValidationIssue.value)
+const canPreviewStoryboard = computed(
+  () => hasYaml.value && !hasValidationIssue.value && scriptStoryboardScenes.value.length > 0,
+)
 
 function saveYamlVersion() {
   if (!canSaveYaml.value) return
@@ -70,6 +78,12 @@ function downloadYaml() {
   link.download = `${safeFileName(props.projectTitle || 'scriptcraft-script')}.yaml`
   link.click()
   URL.revokeObjectURL(link.href)
+}
+
+function openStoryboard(sceneId = '') {
+  if (!canPreviewStoryboard.value) return
+  initialStoryboardSceneId.value = sceneId || scriptScenes.value[0]?.id || ''
+  isStoryboardOpen.value = true
 }
 
 function safeFileName(value: string): string {
@@ -88,6 +102,10 @@ function safeFileName(value: string): string {
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="outline" :disabled="!canPreviewStoryboard" @click="openStoryboard()">
+          <Clapperboard class="size-4" />
+          预演
+        </Button>
         <Button size="sm" variant="outline" :disabled="!canDownloadYaml" @click="downloadYaml">
           <Download class="size-4" />
           导出
@@ -116,7 +134,7 @@ function safeFileName(value: string): string {
 
         <ScrollArea v-else class="h-full pr-3">
           <div class="space-y-4">
-            <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="grid grid-cols-4 gap-2 text-center">
               <div class="rounded-lg border bg-muted/30 p-3">
                 <p class="text-lg font-semibold">{{ scriptCharacters.length }}</p>
                 <p class="text-xs text-muted-foreground">角色</p>
@@ -128,6 +146,10 @@ function safeFileName(value: string): string {
               <div class="rounded-lg border bg-muted/30 p-3">
                 <p class="text-lg font-semibold">{{ scriptScenes.length }}</p>
                 <p class="text-xs text-muted-foreground">场次</p>
+              </div>
+              <div class="rounded-lg border bg-muted/30 p-3">
+                <p class="text-lg font-semibold">{{ scriptStoryboardScenes.length }}</p>
+                <p class="text-xs text-muted-foreground">分镜</p>
               </div>
             </div>
 
@@ -201,7 +223,13 @@ function safeFileName(value: string): string {
                         {{ scene.id }} · {{ locationName(scene.location_id) }}
                       </p>
                     </div>
-                    <Badge variant="secondary">{{ scene.time_of_day || '时间未定' }}</Badge>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Badge variant="secondary">{{ scene.time_of_day || '时间未定' }}</Badge>
+                      <Button size="sm" variant="outline" @click="openStoryboard(scene.id)">
+                        <Clapperboard class="size-4" />
+                        预演
+                      </Button>
+                    </div>
                   </div>
 
                   <p class="text-xs leading-5 text-muted-foreground">{{ scene.summary }}</p>
@@ -294,5 +322,16 @@ function safeFileName(value: string): string {
     >
       当前项目还没有剧本 YAML。
     </div>
+
+    <StoryboardPlayerDialog
+      v-if="isStoryboardOpen"
+      v-model:open="isStoryboardOpen"
+      :project-title="projectTitle"
+      :characters="scriptCharacters"
+      :locations="scriptLocations"
+      :scenes="scriptScenes"
+      :storyboard-scenes="scriptStoryboardScenes"
+      :initial-scene-id="initialStoryboardSceneId"
+    />
   </div>
 </template>
