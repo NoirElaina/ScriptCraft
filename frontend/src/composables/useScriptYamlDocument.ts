@@ -230,6 +230,15 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
     const characterIds = new Set(scriptCharacters.value.map((character) => character.id).filter(Boolean))
     const locationIds = new Set(scriptLocations.value.map((location) => location.id).filter(Boolean))
     const eventIds = new Set(scriptEvents.value.map((event) => event.id).filter(Boolean))
+    const characterLabels = new Map(scriptCharacters.value.map((character) => [character.id, characterLabel(character)]))
+    const locationLabels = new Map(scriptLocations.value.map((location) => [location.id, namedEntityLabel(location.id, location.name)]))
+    const eventLabels = new Map(scriptEvents.value.map((event) => [event.id, eventLabel(event)]))
+    const narratorCharacterIds = new Set(
+      scriptCharacters.value.filter((character) => isNarratorCharacter(character)).map((character) => character.id),
+    )
+    if (narratorCharacterIds.size > 0) {
+      issues.push(`characters 包含旁白类角色：${entityLabels(narratorCharacterIds, characterLabels)}；旁白必须使用 narration 类型，不进入 characters`)
+    }
     const sceneIds = new Set<string>()
     const beatIdsByScene = new Map<string, Set<string>>()
 
@@ -247,16 +256,18 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
       }
       sceneIds.add(scene.id)
       if (!locationIds.has(scene.location_id)) {
-        issues.push(`${scene.id} 引用了不存在的 location_id：${scene.location_id || '空'}`)
+        issues.push(`${scene.id} 引用了不存在的 location_id：${entityLabel(scene.location_id, locationLabels)}`)
       }
       for (const characterId of scene.characters) {
         if (!characterIds.has(characterId)) {
-          issues.push(`${scene.id} 引用了不存在的角色：${characterId}`)
+          issues.push(`${scene.id} 引用了不存在的角色：${entityLabel(characterId, characterLabels)}`)
+        } else if (narratorCharacterIds.has(characterId)) {
+          issues.push(`${scene.id} 把旁白作为角色引用：${entityLabel(characterId, characterLabels)}；旁白必须使用 narration 类型，不进入 scene.characters`)
         }
       }
       for (const eventId of scene.source_events) {
         if (!eventIds.has(eventId)) {
-          issues.push(`${scene.id} 引用了不存在的事件：${eventId}`)
+          issues.push(`${scene.id} 引用了不存在的事件：${entityLabel(eventId, eventLabels)}`)
         }
       }
       if (!scene.beats.length) {
@@ -277,7 +288,9 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
           issues.push(`${scene.id} 的 dialogue beat 缺少 speaker_id`)
         }
         if (beat.speaker_id && !characterIds.has(beat.speaker_id)) {
-          issues.push(`${scene.id} 的 ${beat.id || 'beat'} 引用了不存在的 speaker_id：${beat.speaker_id}`)
+          issues.push(`${scene.id} 的 ${beat.id || 'beat'} 引用了不存在的 speaker_id：${entityLabel(beat.speaker_id, characterLabels)}`)
+        } else if (beat.speaker_id && narratorCharacterIds.has(beat.speaker_id)) {
+          issues.push(`${scene.id} 的 ${beat.id || 'beat'} 把旁白作为 speaker_id：${entityLabel(beat.speaker_id, characterLabels)}；旁白必须使用 narration 类型`)
         }
       }
       beatIdsByScene.set(scene.id, beatIds)
@@ -303,7 +316,9 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
       const castIds = new Set<string>()
       for (const member of storyboardScene.cast) {
         if (!characterIds.has(member.character_id)) {
-          issues.push(`${storyboardScene.scene_id} 的 cast 引用了不存在的角色：${member.character_id || '空'}`)
+          issues.push(`${storyboardScene.scene_id} 的 cast 引用了不存在的角色：${entityLabel(member.character_id, characterLabels)}`)
+        } else if (narratorCharacterIds.has(member.character_id)) {
+          issues.push(`${storyboardScene.scene_id} 的 cast 包含旁白角色：${entityLabel(member.character_id, characterLabels)}；旁白不进入 storyboard.cast`)
         }
         if (member.position.startsWith('offscreen')) {
           issues.push(`${storyboardScene.scene_id} 的 cast.position 不能使用场外位置：${member.position}`)
@@ -336,18 +351,22 @@ export function useScriptYamlDocument(scriptYaml: Ref<string>) {
         }
         for (const action of shot.actions) {
           if (!characterIds.has(action.actor)) {
-            issues.push(`${shot.id || storyboardScene.scene_id} 的 action 引用了不存在的角色：${action.actor || '空'}`)
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 action 引用了不存在的角色：${entityLabel(action.actor, characterLabels)}`)
+          } else if (narratorCharacterIds.has(action.actor)) {
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 action 把旁白作为 actor：${entityLabel(action.actor, characterLabels)}；旁白必须使用 narration 类型`)
           } else if (!castIds.has(action.actor)) {
-            issues.push(`${shot.id || storyboardScene.scene_id} 的 action 角色未出现在 cast 中：${action.actor}`)
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 action 角色未出现在 cast 中：${entityLabel(action.actor, characterLabels)}；当前 cast：${entityLabels(castIds, characterLabels)}`)
           }
         }
         if (shot.type === 'dialogue') {
           if (!shot.dialogue?.speaker_id || !shot.dialogue.text) {
             issues.push(`${shot.id || storyboardScene.scene_id} 是 dialogue 类型，必须包含 dialogue.speaker_id 和 dialogue.text`)
           } else if (!characterIds.has(shot.dialogue.speaker_id)) {
-            issues.push(`${shot.id || storyboardScene.scene_id} 的 dialogue 引用了不存在的角色：${shot.dialogue.speaker_id}`)
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 dialogue 引用了不存在的角色：${entityLabel(shot.dialogue.speaker_id, characterLabels)}`)
+          } else if (narratorCharacterIds.has(shot.dialogue.speaker_id)) {
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 dialogue 把旁白作为 speaker_id：${entityLabel(shot.dialogue.speaker_id, characterLabels)}；旁白必须使用 narration 类型，不进入主场景`)
           } else if (!castIds.has(shot.dialogue.speaker_id)) {
-            issues.push(`${shot.id || storyboardScene.scene_id} 的 dialogue 角色未出现在 cast 中：${shot.dialogue.speaker_id}`)
+            issues.push(`${shot.id || storyboardScene.scene_id} 的 dialogue 角色未出现在 cast 中：${entityLabel(shot.dialogue.speaker_id, characterLabels)}；当前 cast：${entityLabels(castIds, characterLabels)}`)
           }
         }
       }
@@ -449,6 +468,43 @@ function parseStoryboardShot(value: unknown): ScriptStoryboardShot {
       }
     }),
   }
+}
+
+function characterLabel(character: ScriptCharacter): string {
+  const details = [
+    character.name,
+    character.aliases.length ? `别名：${character.aliases.join('、')}` : '',
+    character.role,
+  ].filter(Boolean)
+  return details.length ? `${character.id}（${details.join(' / ')}）` : character.id
+}
+
+function namedEntityLabel(id: string, name: string): string {
+  return name ? `${id}（${name}）` : id
+}
+
+function eventLabel(event: ScriptEvent): string {
+  const summary = event.summary.length > 36 ? `${event.summary.slice(0, 36)}...` : event.summary
+  return summary ? `${event.id}（${summary}）` : event.id
+}
+
+function entityLabel(id: string, labels: Map<string, string>): string {
+  const normalizedId = id.trim()
+  return labels.get(normalizedId) ?? (normalizedId || '空')
+}
+
+function entityLabels(ids: Set<string>, labels: Map<string, string>): string {
+  if (ids.size === 0) return '空'
+  return Array.from(ids)
+    .sort()
+    .map((id) => entityLabel(id, labels))
+    .join('、')
+}
+
+function isNarratorCharacter(character: ScriptCharacter): boolean {
+  return /旁白|叙述者|画外音|narrator/i.test(
+    [character.name, character.role, character.description, ...character.aliases].join(' '),
+  )
 }
 
 function beatTypeLabel(type: string): string {

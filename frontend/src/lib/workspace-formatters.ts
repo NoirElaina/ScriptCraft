@@ -20,6 +20,7 @@ export function taskLabel(taskType: string): string {
     chapter_analysis: '章节分析',
     story_elements: '故事元素',
     script_yaml: '剧本 YAML',
+    script_yaml_repair: '剧本 YAML 修复',
   }
   return labels[taskType] ?? taskType
 }

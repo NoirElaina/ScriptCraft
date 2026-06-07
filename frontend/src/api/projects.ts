@@ -147,6 +147,15 @@ export interface ProjectScriptVersionResponse {
   script_version: ScriptVersion
 }
 
+export interface ProjectScriptYamlRepairResponse {
+  project_id: number
+  title: string
+  yaml_content: string
+  operations: Array<Record<string, unknown>>
+  script_version: ScriptVersion
+  ai_run: AIRun
+}
+
 export interface ProjectWorkspaceResponse {
   project: Project
   chapters: Chapter[]
@@ -218,6 +227,16 @@ export async function saveProjectScriptVersion(
   payload: { version_name: string; yaml_content: string },
 ): Promise<ProjectScriptVersionResponse> {
   return requestJson(`/api/projects/${projectId}/script-versions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function repairProjectScriptYaml(
+  projectId: number,
+  payload: { yaml_content: string; validation_error: string },
+): Promise<ProjectScriptYamlRepairResponse> {
+  return requestJson(`/api/projects/${projectId}/script-yaml/repair`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })

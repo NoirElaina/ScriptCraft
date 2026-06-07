@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 import yaml
@@ -62,6 +63,14 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
     character_ids = _collect_unique_ids(payload.get("characters"), "character")
     location_ids = _collect_unique_ids(payload.get("locations"), "location")
     event_ids = _collect_unique_ids(payload.get("events"), "event")
+    character_labels = _id_labels(payload.get("characters"), _character_label)
+    location_labels = _id_labels(payload.get("locations"), _named_item_label)
+    event_labels = _id_labels(payload.get("events"), _event_label)
+    narrator_character_ids = _narrator_character_ids(payload.get("characters"))
+    if narrator_character_ids:
+        raise LLMResponseError(
+            f"characters 包含旁白类角色：{_labels_for_ids(narrator_character_ids, character_labels)}；旁白必须使用 narration 类型，不进入 characters"
+        )
     scene_ids: set[str] = set()
     scene_beat_ids: dict[str, set[str]] = {}
 
@@ -75,15 +84,17 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
 
         location_id = _required_text(scene, "location_id", scene_id)
         if location_id not in location_ids:
-            raise LLMResponseError(f"{scene_id} 引用了不存在的 location_id：{location_id}")
+            raise LLMResponseError(f"{scene_id} 引用了不存在的 location_id：{_label_id(location_id, location_labels)}")
 
         for character_id in _string_list(scene.get("characters")):
             if character_id not in character_ids:
-                raise LLMResponseError(f"{scene_id} 引用了不存在的角色：{character_id}")
+                raise LLMResponseError(f"{scene_id} 引用了不存在的角色：{_label_id(character_id, character_labels)}")
+            if character_id in narrator_character_ids:
+                raise LLMResponseError(f"{scene_id} 把旁白作为角色引用：{_label_id(character_id, character_labels)}；旁白必须使用 narration 类型，不进入 scene.characters")
 
         for event_id in _string_list(scene.get("source_events")):
             if event_id not in event_ids:
-                raise LLMResponseError(f"{scene_id} 引用了不存在的事件：{event_id}")
+                raise LLMResponseError(f"{scene_id} 引用了不存在的事件：{_label_id(event_id, event_labels)}")
 
         if not isinstance(scene.get("beats"), list) or not scene["beats"]:
             raise LLMResponseError(f"第 {index} 个 scene 缺少 beats")
@@ -100,7 +111,9 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
             if beat_type == "dialogue":
                 speaker_id = _required_text(beat, "speaker_id", beat_id)
                 if speaker_id not in character_ids:
-                    raise LLMResponseError(f"{beat_id} 引用了不存在的 speaker_id：{speaker_id}")
+                    raise LLMResponseError(f"{beat_id} 引用了不存在的 speaker_id：{_label_id(speaker_id, character_labels)}")
+                if speaker_id in narrator_character_ids:
+                    raise LLMResponseError(f"{beat_id} 把旁白作为 dialogue.speaker_id：{_label_id(speaker_id, character_labels)}；旁白必须使用 narration 类型")
         scene_beat_ids[scene_id] = beat_ids
 
     storyboard = payload.get("storyboard")
@@ -133,7 +146,9 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
                 raise LLMResponseError(f"{scene_id} 的第 {cast_index} 个 cast 不是对象")
             character_id = _required_text(member, "character_id", f"{scene_id} cast[{cast_index}]")
             if character_id not in character_ids:
-                raise LLMResponseError(f"{scene_id} 的 cast 引用了不存在的角色：{character_id}")
+                raise LLMResponseError(f"{scene_id} 的 cast 引用了不存在的角色：{_label_id(character_id, character_labels)}")
+            if character_id in narrator_character_ids:
+                raise LLMResponseError(f"{scene_id} 的 cast 包含旁白角色：{_label_id(character_id, character_labels)}；旁白不进入 storyboard.cast")
             position = _required_text(member, "position", f"{scene_id} cast[{cast_index}]")
             if position.startswith("offscreen"):
                 raise LLMResponseError(f"{scene_id} 的 cast.position 不能使用场外位置：{position}")
@@ -164,9 +179,14 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
                     raise LLMResponseError(f"{shot_id} 的第 {action_index} 个 action 不是对象")
                 actor_id = _required_text(action, "actor", f"{shot_id} action[{action_index}]")
                 if actor_id not in character_ids:
-                    raise LLMResponseError(f"{shot_id} 的 action 引用了不存在的角色：{actor_id}")
+                    raise LLMResponseError(f"{shot_id} 的 action 引用了不存在的角色：{_label_id(actor_id, character_labels)}")
+                if actor_id in narrator_character_ids:
+                    raise LLMResponseError(f"{shot_id} 的 action 把旁白作为 actor：{_label_id(actor_id, character_labels)}；旁白必须使用 narration 类型")
                 if actor_id not in cast_ids:
-                    raise LLMResponseError(f"{shot_id} 的 action 角色未出现在 cast 中：{actor_id}，请把该角色加入当前 storyboard scene.cast 并分配站位")
+                    raise LLMResponseError(
+                        f"{shot_id} 的 action 角色未出现在 cast 中：{_label_id(actor_id, character_labels)}；"
+                        f"当前 cast：{_labels_for_ids(cast_ids, character_labels)}。请把该角色加入当前 storyboard scene.cast 并分配站位"
+                    )
             if shot_type == "dialogue":
                 dialogue = shot.get("dialogue")
                 if not isinstance(dialogue, Mapping):
@@ -174,9 +194,14 @@ def validate_script_yaml_payload(payload: Mapping[str, Any]) -> None:
                 speaker_id = _required_text(dialogue, "speaker_id", f"{shot_id}.dialogue")
                 _required_text(dialogue, "text", f"{shot_id}.dialogue")
                 if speaker_id not in character_ids:
-                    raise LLMResponseError(f"{shot_id} 的 dialogue 引用了不存在的角色：{speaker_id}")
+                    raise LLMResponseError(f"{shot_id} 的 dialogue 引用了不存在的角色：{_label_id(speaker_id, character_labels)}")
+                if speaker_id in narrator_character_ids:
+                    raise LLMResponseError(f"{shot_id} 的 dialogue 把旁白作为 speaker_id：{_label_id(speaker_id, character_labels)}；旁白必须使用 narration 类型，不进入主场景")
                 if speaker_id not in cast_ids:
-                    raise LLMResponseError(f"{shot_id} 的 dialogue 角色未出现在 cast 中：{speaker_id}，请把该角色加入当前 storyboard scene.cast 并分配站位")
+                    raise LLMResponseError(
+                        f"{shot_id} 的 dialogue 角色未出现在 cast 中：{_label_id(speaker_id, character_labels)}；"
+                        f"当前 cast：{_labels_for_ids(cast_ids, character_labels)}。请把该角色加入当前 storyboard scene.cast 并分配站位"
+                    )
 
     missing_storyboard_scenes = sorted(scene_ids - storyboard_scene_ids)
     if missing_storyboard_scenes:
@@ -196,6 +221,81 @@ def _collect_unique_ids(value: Any, label: str) -> set[str]:
             raise LLMResponseError(f"{label}.id 重复：{item_id}")
         ids.add(item_id)
     return ids
+
+
+def _id_labels(value: Any, labeler) -> dict[str, str]:
+    if not isinstance(value, list):
+        return {}
+    labels: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id", "")).strip()
+        if item_id:
+            labels[item_id] = labeler(item)
+    return labels
+
+
+def _narrator_character_ids(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id", "")).strip()
+        if item_id and _is_narrator_character(item):
+            ids.add(item_id)
+    return ids
+
+
+def _is_narrator_character(item: Mapping[str, Any]) -> bool:
+    aliases = item.get("aliases")
+    alias_text = " ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else ""
+    text = " ".join(
+        str(value)
+        for value in [
+            item.get("name", ""),
+            item.get("role", ""),
+            item.get("description", ""),
+            alias_text,
+        ]
+    )
+    return bool(re.search(r"旁白|叙述者|画外音|narrator", text, re.IGNORECASE))
+
+
+def _character_label(item: Mapping[str, Any]) -> str:
+    item_id = str(item.get("id", "")).strip()
+    name = str(item.get("name", "")).strip()
+    role = str(item.get("role", "")).strip()
+    aliases = [str(alias).strip() for alias in item.get("aliases", []) if str(alias).strip()] if isinstance(item.get("aliases"), list) else []
+    details = [value for value in [name, f"别名：{'、'.join(aliases)}" if aliases else "", role] if value]
+    return f"{item_id}（{' / '.join(details)}）" if details else item_id
+
+
+def _named_item_label(item: Mapping[str, Any]) -> str:
+    item_id = str(item.get("id", "")).strip()
+    name = str(item.get("name", "")).strip()
+    return f"{item_id}（{name}）" if name else item_id
+
+
+def _event_label(item: Mapping[str, Any]) -> str:
+    item_id = str(item.get("id", "")).strip()
+    summary = str(item.get("summary", "")).strip()
+    if len(summary) > 36:
+        summary = f"{summary[:36]}..."
+    return f"{item_id}（{summary}）" if summary else item_id
+
+
+def _label_id(item_id: str, labels: Mapping[str, str]) -> str:
+    normalized_id = str(item_id or "").strip()
+    return labels.get(normalized_id, normalized_id or "空")
+
+
+def _labels_for_ids(item_ids: set[str], labels: Mapping[str, str]) -> str:
+    if not item_ids:
+        return "空"
+    return "、".join(_label_id(item_id, labels) for item_id in sorted(item_ids))
 
 
 def _required_text(value: Mapping[str, Any], key: str, owner: str) -> str:

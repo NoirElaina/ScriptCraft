@@ -22,6 +22,8 @@ defineProps<{
   isLoadingWorkspace: boolean
   isParsing: boolean
   isSavingProject: boolean
+  readonlyTitle?: boolean
+  showSaveProject?: boolean
 }>()
 
 const projectTitle = defineModel<string>('projectTitle', { required: true })
@@ -65,7 +67,12 @@ function tidyNovelText() {
     <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       <div class="grid gap-2">
         <Label for="project-title">作品名</Label>
-        <Input id="project-title" v-model="projectTitle" placeholder="输入小说标题" />
+        <Input
+          id="project-title"
+          v-model="projectTitle"
+          :disabled="readonlyTitle"
+          placeholder="输入小说标题"
+        />
       </div>
 
       <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
@@ -96,7 +103,12 @@ function tidyNovelText() {
           <BookOpen v-else class="size-4" />
           解析并保存
         </Button>
-        <Button variant="outline" :disabled="isSavingProject" @click="emit('saveProject')">
+        <Button
+          v-if="showSaveProject !== false"
+          variant="outline"
+          :disabled="isSavingProject"
+          @click="emit('saveProject')"
+        >
           <Loader2 v-if="isSavingProject" class="size-4 animate-spin" />
           <Database v-else class="size-4" />
           保存项目

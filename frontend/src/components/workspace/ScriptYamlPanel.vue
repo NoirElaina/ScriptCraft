@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
-import { BookOpen, Clapperboard, Download, Loader2, MapPin, Save, Sparkles, Users } from '@lucide/vue'
+import { BookOpen, Clapperboard, Download, Loader2, MapPin, Save, Sparkles, Users, Wrench } from '@lucide/vue'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,10 @@ const props = defineProps<{
   hasStoryElements: boolean
   isGeneratingYaml: boolean
   isSavingYaml: boolean
+  isRepairingYaml: boolean
+  errorMessage?: string
+  repairedYamlContent?: string
+  repairedYamlRevision?: number
 }>()
 
 const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
@@ -26,6 +30,7 @@ const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 const emit = defineEmits<{
   generate: []
   save: [yamlContent: string, versionName: string]
+  repair: [yamlContent: string, validationError: string]
 }>()
 
 const editableYaml = ref('')
@@ -40,6 +45,15 @@ watch(
     versionName.value = props.scriptVersionName ? `${props.scriptVersionName} 编辑版` : '手动编辑版'
   },
   { immediate: true },
+)
+
+watch(
+  () => props.repairedYamlRevision,
+  () => {
+    if (!props.repairedYamlContent) return
+    editableYaml.value = props.repairedYamlContent
+    activeYamlTab.value = 'source'
+  },
 )
 
 const {
@@ -60,6 +74,9 @@ const hasYaml = computed(() => Boolean(editableYaml.value.trim()))
 const hasValidationIssue = computed(() => scriptValidationIssues.value.length > 0)
 const canSaveYaml = computed(() => hasYaml.value && !hasValidationIssue.value && !props.isSavingYaml)
 const canDownloadYaml = computed(() => hasYaml.value && !hasValidationIssue.value)
+const canRepairYaml = computed(() => {
+  return hasYaml.value && hasValidationIssue.value && !props.isRepairingYaml && !props.isSavingYaml
+})
 const canPreviewStoryboard = computed(
   () => hasYaml.value && !hasValidationIssue.value && scriptStoryboardScenes.value.length > 0,
 )
@@ -67,6 +84,11 @@ const canPreviewStoryboard = computed(
 function saveYamlVersion() {
   if (!canSaveYaml.value) return
   emit('save', editableYaml.value, versionName.value.trim() || '手动编辑版')
+}
+
+function repairYamlDraft() {
+  if (!canRepairYaml.value) return
+  emit('repair', editableYaml.value, scriptValidationIssues.value[0] ?? 'YAML 结构校验失败')
 }
 
 function downloadYaml() {
@@ -303,8 +325,30 @@ function safeFileName(value: string): string {
             v-if="hasValidationIssue"
             class="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
           >
-            <p class="font-medium">YAML 解析或结构校验失败，修正后再保存。</p>
-            <p class="mt-1 text-xs leading-5">{{ scriptValidationIssues[0] }}</p>
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="font-medium">YAML 解析或结构校验失败，修正后再保存。</p>
+                <p class="mt-1 text-xs leading-5">{{ scriptValidationIssues[0] }}</p>
+              </div>
+              <Button
+                class="shrink-0"
+                size="sm"
+                variant="outline"
+                :disabled="!canRepairYaml"
+                @click="repairYamlDraft"
+              >
+                <Loader2 v-if="isRepairingYaml" class="size-4 animate-spin" />
+                <Wrench v-else class="size-4" />
+                AI 修复
+              </Button>
+            </div>
+          </div>
+
+          <div
+            v-if="props.errorMessage"
+            class="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs leading-5 text-destructive"
+          >
+            AI 修复失败：{{ props.errorMessage }}
           </div>
 
           <Textarea
