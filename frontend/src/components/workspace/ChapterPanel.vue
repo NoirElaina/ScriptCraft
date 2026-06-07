@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import {
   BookOpen,
   Clapperboard,
+  Edit3,
   FileText,
   GitBranch,
   Loader2,
@@ -17,10 +18,20 @@ import AgentFlowDialog from '@/components/workspace/AgentFlowDialog.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { normalizeNovelText } from '@/lib/novel-text'
 
 const props = defineProps<{
+  projectTitle: string
   chapters: Chapter[]
   chapterAnalyses: ChapterAnalysis[]
   chapterCoverageLabel: string
@@ -31,13 +42,17 @@ const props = defineProps<{
   isExtracting: boolean
   isGeneratingYaml: boolean
   isAiTaskRunning: boolean
+  isRenamingProject: boolean
 }>()
 
 const selectedChapterId = defineModel<string | undefined>('selectedChapterId')
 const isAgentFlowOpen = ref(false)
+const isRenameDialogOpen = ref(false)
+const draftProjectTitle = ref('')
 
 const emit = defineEmits<{
   openNovelInput: []
+  renameProject: [title: string]
   analyzeChapters: []
   extractStoryElements: []
   generateScriptYaml: []
@@ -133,6 +148,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isChapterAnalyzed(chapter: Chapter): boolean {
   return analyzedChapterIds.value.has(chapter.id)
 }
+
+function openRenameDialog() {
+  draftProjectTitle.value = props.projectTitle
+  isRenameDialogOpen.value = true
+}
+
+function submitProjectRename() {
+  const title = draftProjectTitle.value.trim()
+  if (!title || props.isRenamingProject) return
+
+  emit('renameProject', title)
+  isRenameDialogOpen.value = false
+}
 </script>
 
 <template>
@@ -144,9 +172,21 @@ function isChapterAnalyzed(chapter: Chapter): boolean {
             <BookOpen class="size-4" />
             项目章节
           </CardTitle>
-          <CardDescription>章节内容来自当前项目的数据库记录。</CardDescription>
+          <CardDescription>章节内容持久化记录</CardDescription>
         </div>
         <div class="flex shrink-0 items-center gap-2">
+          <div class="flex max-w-[180px] items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-sm sm:max-w-[220px]">
+            <span class="truncate font-medium">{{ projectTitle }}</span>
+            <Button
+              size="icon"
+              variant="ghost"
+              class="size-6 shrink-0"
+              title="修改项目名称"
+              @click="openRenameDialog"
+            >
+              <Edit3 class="size-3.5" />
+            </Button>
+          </div>
           <Badge :variant="chapters.length > 0 ? 'default' : 'secondary'">
             {{ chapterCoverageLabel }}
           </Badge>
@@ -325,4 +365,23 @@ function isChapterAnalyzed(chapter: Chapter): boolean {
     :story-elements="storyElements"
     :script-version-name="scriptVersionName"
   />
+
+  <Dialog v-model:open="isRenameDialogOpen">
+    <DialogContent class="sm:max-w-[420px]">
+      <DialogHeader>
+        <DialogTitle>修改项目名称</DialogTitle>
+        <DialogDescription>只更新当前项目名称，不会改动章节正文和 AI 结果。</DialogDescription>
+      </DialogHeader>
+
+      <form class="space-y-4" @submit.prevent="submitProjectRename">
+        <Input v-model="draftProjectTitle" placeholder="项目名称" autofocus />
+        <DialogFooter>
+          <Button type="submit" :disabled="!draftProjectTitle.trim() || isRenamingProject">
+            <Loader2 v-if="isRenamingProject" class="size-4 animate-spin" />
+            保存名称
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 </template>
