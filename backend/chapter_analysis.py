@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from llm.base import LLMResponseError, parse_json_content
+from llm.streaming import StreamCallback, invoke_model
 
 
 class ChapterAnalysisState(TypedDict, total=False):
@@ -14,6 +15,7 @@ class ChapterAnalysisState(TypedDict, total=False):
     chapter: Mapping[str, Any]
     memory: Mapping[str, Any]
     messages: list[BaseMessage]
+    on_stream: StreamCallback
     raw_payload: dict[str, Any]
     result: dict[str, Any]
 
@@ -27,12 +29,14 @@ class ChapterAnalyzer:
         title: str,
         chapter: Mapping[str, Any],
         memory: Mapping[str, Any] | None = None,
+        on_stream: StreamCallback | None = None,
     ) -> dict[str, Any]:
         state = self.graph.invoke(
             {
                 "title": title.strip() or "未命名小说",
                 "chapter": chapter,
                 "memory": memory or {},
+                "on_stream": on_stream,
             }
         )
         return state["result"]
@@ -63,7 +67,13 @@ def build_prompt_node(state: ChapterAnalysisState) -> ChapterAnalysisState:
 def call_model_node(model: BaseChatModel):
     def node(state: ChapterAnalysisState) -> ChapterAnalysisState:
         try:
-            response = model.invoke(state["messages"])
+            response = invoke_model(
+                model,
+                state["messages"],
+                on_stream=state.get("on_stream"),
+                node="chapter_analysis",
+                title="章节分析模型输出",
+            )
         except Exception as exc:
             raise LLMResponseError(f"AI 服务调用失败：{exc}") from exc
         return {"raw_payload": parse_json_content(response.content)}

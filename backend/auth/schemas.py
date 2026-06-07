@@ -30,6 +30,5 @@ class LoginRequest(BaseModel):
 
 
 class AuthTokenResponse(BaseModel):
-    token: str
     expires_at: datetime
     user: UserResponse

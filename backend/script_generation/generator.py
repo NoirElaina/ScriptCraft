@@ -1,11 +1,15 @@
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+import yaml
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from llm.base import LLMResponseError
+from llm.streaming import StreamCallback, emit_tool_event
 from .fragment import ChapterScriptFragmentGenerator
 from .memory import EMPTY_SCRIPT_MEMORY, ScriptMemoryUpdater
 from .planner import ChapterScenePlanner
+from .repair import ScriptYamlToolRepairer
 from .validation import normalize_script_yaml_payload
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -13,6 +17,7 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 
 class ScriptYamlGenerator:
     def __init__(self, model: BaseChatModel) -> None:
+        self.model = model
         self.planner = ChapterScenePlanner(model)
         self.fragment_generator = ChapterScriptFragmentGenerator(model)
         self.memory_updater = ScriptMemoryUpdater(model)
@@ -24,7 +29,9 @@ class ScriptYamlGenerator:
         characters: Sequence[Mapping[str, Any]],
         locations: Sequence[Mapping[str, Any]],
         events: Sequence[Mapping[str, Any]],
+        scene_cards: Sequence[Mapping[str, Any]],
         on_progress: ProgressCallback | None = None,
+        on_stream: StreamCallback | None = None,
     ) -> str:
         normalized_title = title.strip() or "未命名小说"
         sorted_chapters = sorted(chapters, key=lambda chapter: _int(chapter.get("index"), 0))
@@ -35,15 +42,31 @@ class ScriptYamlGenerator:
         for offset, chapter in enumerate(sorted_chapters, start=1):
             chapter_events = _events_for_chapter(events, str(chapter.get("id", "")).strip())
             _report_progress(on_progress, "scene_planning", chapter, offset, chapter_total, offset - 1, len(fragments))
+            emit_tool_event(
+                on_stream,
+                node="script_yaml",
+                title="开始规划章节",
+                content=f"正在规划《{chapter.get('title') or chapter.get('heading') or ''}》。",
+                event_type="stage",
+            )
             plan = self.planner.plan(
                 title=normalized_title,
                 chapter=chapter,
                 characters=characters,
                 locations=locations,
                 events=chapter_events,
+                scene_cards=_scenes_for_chapter(scene_cards, str(chapter.get("id", "")).strip()),
                 memory=memory,
+                on_stream=on_stream,
             )
             _report_progress(on_progress, "fragment_generation", chapter, offset, chapter_total, offset - 1, len(fragments))
+            emit_tool_event(
+                on_stream,
+                node="script_yaml",
+                title="开始写入 YAML 片段",
+                content=f"正在生成《{chapter.get('title') or chapter.get('heading') or ''}》的剧本片段。",
+                event_type="stage",
+            )
             fragment = self.fragment_generator.generate(
                 title=normalized_title,
                 chapter=chapter,
@@ -51,31 +74,48 @@ class ScriptYamlGenerator:
                 characters=characters,
                 locations=locations,
                 events=chapter_events,
+                scene_cards=_scenes_for_chapter(scene_cards, str(chapter.get("id", "")).strip()),
                 memory=memory,
+                on_stream=on_stream,
             )
             fragments.append(fragment)
             _report_progress(on_progress, "memory_update", chapter, offset, chapter_total, offset - 1, len(fragments))
+            emit_tool_event(
+                on_stream,
+                node="script_yaml",
+                title="更新剧本记忆",
+                content=f"正在保存《{chapter.get('title') or chapter.get('heading') or ''}》后的连续性记忆。",
+                event_type="stage",
+            )
             memory = self.memory_updater.update(
                 title=normalized_title,
                 chapter=chapter,
                 plan=plan,
                 fragment=fragment,
                 previous_memory=memory,
+                on_stream=on_stream,
             )
             _report_progress(on_progress, "chapter_completed", chapter, offset, chapter_total, offset, len(fragments))
 
         _report_progress(on_progress, "assemble", None, chapter_total, chapter_total, chapter_total, len(fragments))
-        yaml_content = normalize_script_yaml_payload(
-            assemble_script_yaml_payload(
-                title=normalized_title,
-                chapters=sorted_chapters,
-                characters=characters,
-                locations=locations,
-                events=events,
-                fragments=fragments,
-                memory=memory,
-            )
+        payload = assemble_script_yaml_payload(
+            title=normalized_title,
+            chapters=sorted_chapters,
+            characters=characters,
+            locations=locations,
+            events=events,
+            fragments=fragments,
+            memory=memory,
         )
+        try:
+            yaml_content = normalize_script_yaml_payload(payload)
+        except LLMResponseError as exc:
+            raw_yaml = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+            yaml_content = ScriptYamlToolRepairer(self.model).repair(
+                raw_yaml,
+                str(exc),
+                on_stream=on_stream,
+            ).yaml_content
         _report_progress(on_progress, "finished", None, chapter_total, chapter_total, chapter_total, len(fragments))
         return yaml_content
 
@@ -128,6 +168,10 @@ def _events_for_chapter(events: Sequence[Mapping[str, Any]], chapter_id: str) ->
         elif isinstance(source_chapters, list) and chapter_id in {str(item).strip() for item in source_chapters}:
             matched_events.append(event)
     return matched_events
+
+
+def _scenes_for_chapter(scenes: Sequence[Mapping[str, Any]], chapter_id: str) -> list[Mapping[str, Any]]:
+    return [scene for scene in scenes if str(scene.get("source_chapter", "")).strip() == chapter_id]
 
 
 def _object_items(value: Any) -> list[Mapping[str, Any]]:

@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from llm.base import LLMResponseError, parse_yaml_content
+from llm.streaming import StreamCallback, invoke_model
 from .validation import validate_script_yaml_fragment
 
 SCRIPT_FRAGMENT_REPAIR_LIMIT = 2
@@ -19,8 +20,10 @@ class ChapterScriptFragmentState(TypedDict, total=False):
     characters: Sequence[Mapping[str, Any]]
     locations: Sequence[Mapping[str, Any]]
     events: Sequence[Mapping[str, Any]]
+    scene_cards: Sequence[Mapping[str, Any]]
     memory: Mapping[str, Any]
     messages: list[BaseMessage]
+    on_stream: StreamCallback
     raw_yaml: Any
     result: dict[str, Any]
     repair_attempts: int
@@ -40,7 +43,9 @@ class ChapterScriptFragmentGenerator:
         characters: Sequence[Mapping[str, Any]],
         locations: Sequence[Mapping[str, Any]],
         events: Sequence[Mapping[str, Any]],
+        scene_cards: Sequence[Mapping[str, Any]],
         memory: Mapping[str, Any],
+        on_stream: StreamCallback | None = None,
     ) -> dict[str, Any]:
         state = self.graph.invoke(
             {
@@ -50,7 +55,9 @@ class ChapterScriptFragmentGenerator:
                 "characters": characters,
                 "locations": locations,
                 "events": events,
+                "scene_cards": scene_cards,
                 "memory": memory,
+                "on_stream": on_stream,
             }
         )
         return state["result"]
@@ -84,6 +91,7 @@ def build_prompt_node(state: ChapterScriptFragmentState) -> ChapterScriptFragmen
             characters=state["characters"],
             locations=state["locations"],
             events=state["events"],
+            scene_cards=state["scene_cards"],
             memory=state["memory"],
         )
     }
@@ -92,7 +100,13 @@ def build_prompt_node(state: ChapterScriptFragmentState) -> ChapterScriptFragmen
 def call_model_node(model: BaseChatModel):
     def node(state: ChapterScriptFragmentState) -> ChapterScriptFragmentState:
         try:
-            response = model.invoke(state["messages"])
+            response = invoke_model(
+                model,
+                state["messages"],
+                on_stream=state.get("on_stream"),
+                node="yaml_writer",
+                title="章节 YAML 模型输出",
+            )
         except Exception as exc:
             raise LLMResponseError(f"AI 服务调用失败：{exc}") from exc
         return {"raw_yaml": response.content}
@@ -139,6 +153,7 @@ def build_chapter_script_fragment_messages(
     characters: Sequence[Mapping[str, Any]],
     locations: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
+    scene_cards: Sequence[Mapping[str, Any]],
     memory: Mapping[str, Any],
 ) -> list[BaseMessage]:
     chapter_index = _int(chapter.get("index"), 0)
@@ -151,6 +166,7 @@ def build_chapter_script_fragment_messages(
         "characters": characters,
         "locations": locations,
         "current_chapter_events": events,
+        "current_chapter_scene_cards": scene_cards,
         "script_memory": memory,
     }
 
@@ -179,6 +195,7 @@ def build_chapter_script_fragment_messages(
                 "action 类型 shot 必须至少包含 actions、effects 或 props 中的一项。\n"
                 f"beat.id 必须使用 {beat_prefix}<场序号>_<拍序号>，shot.id 必须使用 {shot_prefix}<场序号>_<镜头序号>。\n"
                 "只使用输入中的角色、地点、事件 ID，不要新增 ID。\n\n"
+                "优先复用 current_chapter_scene_cards 的场景划分、戏剧目的、关键节拍和角色出场信息。\n\n"
                 "输入数据 JSON：\n"
                 f"{json.dumps(source, ensure_ascii=False)}"
             )

@@ -8,7 +8,6 @@ import {
   type AuthTokenResponse,
   type AuthUser,
 } from '@/api/auth'
-import { getAuthToken } from '@/api/client'
 import {
   createProject,
   deleteProject,
@@ -92,12 +91,12 @@ const scriptVersionName = computed(() => workspace.value?.script_version?.versio
 const aiRuns = computed<AIRun[]>(() => workspace.value?.ai_runs ?? [])
 const storyElementsCountLabel = computed(() => {
   if (!storyElements.value) return '元素未抽取'
-  return `角色 ${storyElements.value.characters.length} / 地点 ${storyElements.value.locations.length} / 事件 ${storyElements.value.events.length}`
+  return `角色 ${storyElements.value.characters.length} / 地点 ${storyElements.value.locations.length} / 事件 ${storyElements.value.events.length} / 场景 ${storyElements.value.scenes.length}`
 })
 
 const chapterCoverageLabel = computed(() => {
   if (chapters.value.length === 0) return '未解析'
-  return chapters.value.length >= 3 ? '符合 3 章要求' : '章节不足'
+  return `已保存 ${chapters.value.length} 章`
 })
 
 const chapterAnalysisLabel = computed(() => {
@@ -165,11 +164,6 @@ watch(
 )
 
 async function restoreAuthSession() {
-  if (!getAuthToken()) {
-    isCheckingAuth.value = false
-    return
-  }
-
   try {
     currentUser.value = await getCurrentUser()
     const loadedProjects = await loadProjectList()
@@ -323,10 +317,8 @@ async function handleSaveProject() {
   isSavingProject.value = true
 
   try {
-    const sourceText = tidyDraftText()
     const updatedProject = await updateProject(project.id, {
       title: projectTitle.value.trim() || '未命名小说',
-      source_text: sourceText,
     })
     workspace.value = workspace.value ? { ...workspace.value, project: updatedProject } : workspace.value
     projectTitle.value = updatedProject.title
@@ -371,10 +363,6 @@ async function handleParseProjectChapters() {
 
   try {
     const sourceText = tidyDraftText()
-    await updateProject(project.id, {
-      title: projectTitle.value.trim() || '未命名小说',
-      source_text: sourceText,
-    })
     const result = await parseProjectChapters(project.id, sourceText)
     selectedChapterId.value = result.chapters[0]?.id
     await refreshWorkspace()
@@ -675,16 +663,13 @@ function forgetActiveProject(projectId?: number) {
             :script-yaml="scriptYaml"
             :project-title="currentProject.title"
             :script-version-name="scriptVersionName"
-            :has-story-elements="Boolean(storyElements) && !isAiTaskRunning"
             :is-loading-workspace="isLoadingWorkspace"
-            :is-generating-yaml="isScriptYamlBusy"
             :is-saving-yaml="isSavingYaml"
             :is-repairing-yaml="isRepairingYaml"
             :error-message="pipelineErrorMessage"
             :repaired-yaml-content="repairedYamlContent"
             :repaired-yaml-revision="repairedYamlRevision"
             @refresh="refreshWorkspace"
-            @generate-script-yaml="handleGenerateScriptYaml"
             @save-script-yaml="handleSaveScriptYaml"
             @repair-script-yaml="handleRepairScriptYaml"
           />

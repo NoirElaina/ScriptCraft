@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base, utc_now
@@ -16,7 +17,7 @@ class Chapter(Base):
     chapter_key: Mapped[str] = mapped_column(String(80))
     heading: Mapped[str] = mapped_column(String(120))
     title: Mapped[str] = mapped_column(String(180))
-    content: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(MEDIUMTEXT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

@@ -102,12 +102,26 @@ class EventItemResponse(BaseModel):
     involved_characters: list[str] = Field(default_factory=list)
 
 
+class SceneCardItemResponse(BaseModel):
+    id: str
+    title: str
+    source_chapter: str
+    location_id: str = ""
+    characters: list[str] = Field(default_factory=list)
+    source_events: list[str] = Field(default_factory=list)
+    summary: str = ""
+    dramatic_purpose: str = ""
+    key_beats: list[str] = Field(default_factory=list)
+    time_of_day: str = "unknown"
+
+
 class StoryElementsSnapshotResponse(BaseModel):
     id: int
     project_id: int
     characters: list[CharacterItemResponse]
     locations: list[LocationItemResponse]
     events: list[EventItemResponse]
+    scenes: list[SceneCardItemResponse] = Field(default_factory=list)
     created_at: datetime
 
 

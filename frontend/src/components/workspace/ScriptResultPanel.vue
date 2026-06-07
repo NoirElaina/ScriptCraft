@@ -9,8 +9,6 @@ defineProps<{
   scriptYaml: string
   projectTitle: string
   scriptVersionName?: string
-  hasStoryElements: boolean
-  isGeneratingYaml: boolean
   isSavingYaml: boolean
   isRepairingYaml: boolean
   isLoadingWorkspace: boolean
@@ -23,7 +21,6 @@ const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 
 const emit = defineEmits<{
   refresh: []
-  generateScriptYaml: []
   saveScriptYaml: [yamlContent: string, versionName: string]
   repairScriptYaml: [yamlContent: string, validationError: string]
 }>()
@@ -53,14 +50,11 @@ const emit = defineEmits<{
         :script-yaml="scriptYaml"
         :project-title="projectTitle"
         :script-version-name="scriptVersionName"
-        :has-story-elements="hasStoryElements"
-        :is-generating-yaml="isGeneratingYaml"
         :is-saving-yaml="isSavingYaml"
         :is-repairing-yaml="isRepairingYaml"
         :error-message="errorMessage"
         :repaired-yaml-content="repairedYamlContent"
         :repaired-yaml-revision="repairedYamlRevision"
-        @generate="emit('generateScriptYaml')"
         @save="(yamlContent, versionName) => emit('saveScriptYaml', yamlContent, versionName)"
         @repair="(yamlContent, validationError) => emit('repairScriptYaml', yamlContent, validationError)"
       />

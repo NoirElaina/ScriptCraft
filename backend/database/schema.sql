@@ -15,29 +15,13 @@ CREATE TABLE IF NOT EXISTS users (
   UNIQUE KEY uq_users_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS auth_sessions (
-  id INT NOT NULL AUTO_INCREMENT,
-  user_id INT NOT NULL,
-  token_hash VARCHAR(128) NOT NULL,
-  created_at DATETIME NOT NULL,
-  expires_at DATETIME NOT NULL,
-  revoked_at DATETIME NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_auth_sessions_token_hash (token_hash),
-  KEY ix_auth_sessions_user_id (user_id),
-  KEY ix_auth_sessions_expires_at (expires_at),
-  CONSTRAINT fk_auth_sessions_user_id_users
-    FOREIGN KEY (user_id) REFERENCES users (id)
-    ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS projects (
   id INT NOT NULL AUTO_INCREMENT,
   owner_id INT NULL,
   title VARCHAR(120) NOT NULL,
   description TEXT NOT NULL,
   status VARCHAR(40) NOT NULL,
-  source_text TEXT NOT NULL,
+  source_text MEDIUMTEXT NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (id),
@@ -56,7 +40,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   chapter_key VARCHAR(80) NOT NULL,
   heading VARCHAR(120) NOT NULL,
   title VARCHAR(180) NOT NULL,
-  content TEXT NOT NULL,
+  content MEDIUMTEXT NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (id),
@@ -98,6 +82,7 @@ CREATE TABLE IF NOT EXISTS story_elements (
   characters JSON NOT NULL,
   locations JSON NOT NULL,
   events JSON NOT NULL,
+  scenes JSON NOT NULL,
   created_at DATETIME NOT NULL,
   PRIMARY KEY (id),
   KEY ix_story_elements_project_id (project_id),
@@ -111,7 +96,7 @@ CREATE TABLE IF NOT EXISTS script_versions (
   project_id INT NOT NULL,
   version_name VARCHAR(120) NOT NULL,
   schema_version VARCHAR(40) NOT NULL,
-  yaml_content TEXT NOT NULL,
+  yaml_content MEDIUMTEXT NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (id),

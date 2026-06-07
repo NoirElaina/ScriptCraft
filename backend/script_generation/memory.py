@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from llm.base import LLMResponseError, parse_json_content
+from llm.streaming import StreamCallback, invoke_model
 
 
 EMPTY_SCRIPT_MEMORY = {
@@ -25,6 +26,7 @@ class ScriptMemoryState(TypedDict, total=False):
     fragment: Mapping[str, Any]
     previous_memory: Mapping[str, Any]
     messages: list[BaseMessage]
+    on_stream: StreamCallback
     raw_payload: dict[str, Any]
     result: dict[str, Any]
 
@@ -41,6 +43,7 @@ class ScriptMemoryUpdater:
         plan: Mapping[str, Any],
         fragment: Mapping[str, Any],
         previous_memory: Mapping[str, Any],
+        on_stream: StreamCallback | None = None,
     ) -> dict[str, Any]:
         state = self.graph.invoke(
             {
@@ -49,6 +52,7 @@ class ScriptMemoryUpdater:
                 "plan": plan,
                 "fragment": fragment,
                 "previous_memory": previous_memory,
+                "on_stream": on_stream,
             }
         )
         return state["result"]
@@ -81,7 +85,13 @@ def build_prompt_node(state: ScriptMemoryState) -> ScriptMemoryState:
 def call_model_node(model: BaseChatModel):
     def node(state: ScriptMemoryState) -> ScriptMemoryState:
         try:
-            response = model.invoke(state["messages"])
+            response = invoke_model(
+                model,
+                state["messages"],
+                on_stream=state.get("on_stream"),
+                node="script_memory",
+                title="剧本记忆模型输出",
+            )
         except Exception as exc:
             raise LLMResponseError(f"AI 服务调用失败：{exc}") from exc
         return {"raw_payload": parse_json_content(response.content)}

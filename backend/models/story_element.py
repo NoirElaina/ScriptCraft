@@ -14,6 +14,7 @@ class StoryElement(Base):
     characters: Mapped[list[dict]] = mapped_column(JSON, default=list)
     locations: Mapped[list[dict]] = mapped_column(JSON, default=list)
     events: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    scenes: Mapped[list[dict]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     project = relationship("Project", back_populates="story_elements")

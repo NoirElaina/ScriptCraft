@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-type GraphNodeType = 'character' | 'location' | 'event'
+type GraphNodeType = 'character' | 'location' | 'event' | 'scene'
 
 interface GraphNodeDetail extends SimulationNodeDatum {
   id: string
@@ -33,7 +33,7 @@ interface GraphLink {
   id: string
   source: string | GraphNodeDetail
   target: string | GraphNodeDetail
-  type: 'character-event' | 'event-location'
+  type: 'character-event' | 'event-location' | 'scene-character' | 'scene-location' | 'scene-event'
 }
 
 interface GraphRuntimeNode extends GraphNodeDetail {
@@ -91,7 +91,17 @@ const graphNodes = computed<GraphNodeDetail[]>(() => {
     color: '#059669',
   }))
 
-  return [...characters, ...events, ...locations]
+  const scenes = elements.scenes.map((scene) => ({
+    id: scene.id,
+    type: 'scene' as const,
+    label: scene.title,
+    caption: shortLabel(scene.title, 8),
+    detail: scene.summary || scene.dramatic_purpose,
+    radius: 5,
+    color: '#7c3aed',
+  }))
+
+  return [...characters, ...events, ...locations, ...scenes]
 })
 
 const graphLinks = computed<GraphLink[]>(() => {
@@ -99,6 +109,8 @@ const graphLinks = computed<GraphLink[]>(() => {
   if (!elements) return []
 
   const characterIds = new Set(elements.characters.map((character) => character.id))
+  const locationIds = new Set(elements.locations.map((location) => location.id))
+  const eventIds = new Set(elements.events.map((event) => event.id))
   const links: GraphLink[] = []
 
   for (const event of elements.events) {
@@ -120,6 +132,39 @@ const graphLinks = computed<GraphLink[]>(() => {
           source: event.id,
           target: location.id,
           type: 'event-location',
+        })
+      }
+    }
+  }
+
+  for (const scene of elements.scenes) {
+    for (const characterId of scene.characters) {
+      if (characterIds.has(characterId)) {
+        links.push({
+          id: `${scene.id}-${characterId}`,
+          source: scene.id,
+          target: characterId,
+          type: 'scene-character',
+        })
+      }
+    }
+
+    if (locationIds.has(scene.location_id)) {
+      links.push({
+        id: `${scene.id}-${scene.location_id}`,
+        source: scene.id,
+        target: scene.location_id,
+        type: 'scene-location',
+      })
+    }
+
+    for (const eventId of scene.source_events) {
+      if (eventIds.has(eventId)) {
+        links.push({
+          id: `${scene.id}-${eventId}`,
+          source: scene.id,
+          target: eventId,
+          type: 'scene-event',
         })
       }
     }
@@ -163,8 +208,22 @@ const graphSignature = computed(() => {
       involved_characters: [...event.involved_characters].sort(),
     }))
     .sort((left, right) => left.id.localeCompare(right.id))
+  const scenes = elements.scenes
+    .map((scene) => ({
+      id: scene.id,
+      title: scene.title,
+      source_chapter: scene.source_chapter,
+      location_id: scene.location_id,
+      characters: [...scene.characters].sort(),
+      source_events: [...scene.source_events].sort(),
+      summary: scene.summary,
+      dramatic_purpose: scene.dramatic_purpose,
+      key_beats: [...scene.key_beats],
+      time_of_day: scene.time_of_day,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))
 
-  return JSON.stringify({ characters, locations, events })
+  return JSON.stringify({ characters, locations, events, scenes })
 })
 
 onMounted(() => {
@@ -227,7 +286,7 @@ async function renderGraph(options: { resetView?: boolean } = {}) {
     .selectAll<SVGLineElement, GraphRuntimeLink>('line')
     .data(links, (link) => link.id)
     .join('line')
-    .attr('stroke', (link) => link.type === 'character-event' ? '#bfdbfe' : '#bbf7d0')
+    .attr('stroke', (link) => linkColor(link.type))
     .attr('stroke-width', 1.15)
     .attr('stroke-opacity', 0.68)
 
@@ -375,8 +434,20 @@ function typeLabel(type: GraphNodeType): string {
     character: '角色',
     event: '事件',
     location: '地点',
+    scene: '场景',
   }
   return labels[type]
+}
+
+function linkColor(type: GraphLink['type']): string {
+  const colors: Record<GraphLink['type'], string> = {
+    'character-event': '#bfdbfe',
+    'event-location': '#bbf7d0',
+    'scene-character': '#ddd6fe',
+    'scene-location': '#a7f3d0',
+    'scene-event': '#fde68a',
+  }
+  return colors[type]
 }
 
 function shortLabel(value: string, maxLength: number): string {
@@ -398,7 +469,7 @@ function shortLabel(value: string, maxLength: number): string {
         </div>
         <div class="flex shrink-0 items-center gap-2">
           <Badge v-if="storyElements" variant="secondary">
-            {{ storyElements.characters.length + storyElements.locations.length + storyElements.events.length }} 节点
+            {{ storyElements.characters.length + storyElements.locations.length + storyElements.events.length + storyElements.scenes.length }} 节点
           </Badge>
           <Button v-if="hasGraph" size="sm" variant="outline" @click="openFullscreenGraph">
             <Maximize2 class="size-4" />
@@ -439,27 +510,34 @@ function shortLabel(value: string, maxLength: number): string {
         <p class="mt-1 text-xs text-muted-foreground">完成故事元素抽取后会显示角色、地点和事件关系。</p>
       </div>
 
-      <div v-if="storyElements" class="grid grid-cols-3 gap-2">
+      <div v-if="storyElements" class="grid grid-cols-4 gap-2">
         <div class="rounded-lg border bg-background p-3">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <div class="flex items-center gap-2 text-xs text-blue-600">
             <Users class="size-3.5" />
             角色
           </div>
-          <p class="mt-1 text-xl font-semibold">{{ storyElements.characters.length }}</p>
+          <p class="mt-1 text-xl font-semibold text-blue-600">{{ storyElements.characters.length }}</p>
         </div>
         <div class="rounded-lg border bg-background p-3">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <div class="flex items-center gap-2 text-xs text-emerald-600">
             <MapPin class="size-3.5" />
             地点
           </div>
-          <p class="mt-1 text-xl font-semibold">{{ storyElements.locations.length }}</p>
+          <p class="mt-1 text-xl font-semibold text-emerald-600">{{ storyElements.locations.length }}</p>
         </div>
         <div class="rounded-lg border bg-background p-3">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <div class="flex items-center gap-2 text-xs text-zinc-600">
             <GitBranch class="size-3.5" />
             事件
           </div>
-          <p class="mt-1 text-xl font-semibold">{{ storyElements.events.length }}</p>
+          <p class="mt-1 text-xl font-semibold text-zinc-600">{{ storyElements.events.length }}</p>
+        </div>
+        <div class="rounded-lg border bg-background p-3">
+          <div class="flex items-center gap-2 text-xs text-violet-600">
+            <CircleDot class="size-3.5" />
+            场景
+          </div>
+          <p class="mt-1 text-xl font-semibold text-violet-600">{{ storyElements.scenes.length }}</p>
         </div>
       </div>
 
@@ -481,7 +559,7 @@ function shortLabel(value: string, maxLength: number): string {
           </div>
           <div class="flex shrink-0 items-center gap-2">
             <Badge v-if="storyElements" variant="secondary">
-              {{ storyElements.characters.length + storyElements.locations.length + storyElements.events.length }} 节点
+              {{ storyElements.characters.length + storyElements.locations.length + storyElements.events.length + storyElements.scenes.length }} 节点
             </Badge>
             <Button size="sm" variant="outline" @click="fitGraph">
               <Maximize2 class="size-4" />

@@ -13,6 +13,7 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from llm.base import LLMResponseError, parse_yaml_content
+from llm.streaming import StreamCallback, emit_tool_event, invoke_model
 from .validation import normalize_script_yaml_payload
 
 
@@ -77,6 +78,7 @@ class ScriptYamlRepairState(TypedDict, total=False):
     repair_attempts: int
     operation_count: int
     last_validated_operation_count: int
+    on_stream: StreamCallback
     result: ScriptYamlRepairResult
 
 
@@ -92,13 +94,16 @@ class _ResolvedTarget:
 class _YamlDocumentTools:
     payload: dict[str, Any]
     operations: list[dict[str, Any]] = field(default_factory=list)
+    on_stream: StreamCallback | None = None
 
     def read_yaml(self, target: str) -> str:
         resolved = self._resolve(target)
+        self._emit("读取 YAML 节点", f"{target} -> {resolved.path}")
         return _json_result({"path": resolved.path, "value": resolved.value})
 
     def read_yaml_context(self, target: str) -> str:
         resolved = self._resolve(target)
+        self._emit("读取 YAML 上下文", f"定位 {target}：{resolved.path}")
         node = resolved.value if isinstance(resolved.value, Mapping) else {}
         scene = self._scene_for_node(node)
         storyboard_scene = self._storyboard_scene_for_node(node, scene)
@@ -172,6 +177,7 @@ class _YamlDocumentTools:
         if key:
             record["key"] = key
         self.operations.append(record)
+        self._emit("写入 YAML", f"{operation} {changed_path}")
         return _json_result({"ok": True, "changed_path": changed_path})
 
     def append_shot_action(self, shot_id: str, action: dict[str, Any]) -> str:
@@ -201,6 +207,7 @@ class _YamlDocumentTools:
                 "actor": normalized_action["actor"],
             }
         )
+        self._emit("补充镜头动作", f"{shot_id} 添加 actor={normalized_action['actor']}")
         return _json_result(
             {
                 "ok": True,
@@ -244,6 +251,7 @@ class _YamlDocumentTools:
                         "character_id": character_id,
                     }
                 )
+                self._emit("更新出场角色", f"{scene_id} 已包含 {character_id}，更新站位 {position}")
                 return _json_result(
                     {
                         "ok": True,
@@ -264,6 +272,7 @@ class _YamlDocumentTools:
                 "character_id": character_id,
             }
         )
+        self._emit("补充出场角色", f"{scene_id} 加入 {character_id}，站位 {position}")
         return _json_result(
             {
                 "ok": True,
@@ -286,7 +295,11 @@ class _YamlDocumentTools:
         resolved.value[key] = value
         changed_path = f"{resolved.path}.{key}"
         self.operations.append({"operation": "set_shot_field", "target": shot_id, "path": changed_path, "key": key})
+        self._emit("修改镜头字段", f"{shot_id}.{key}")
         return _json_result({"ok": True, "changed_path": changed_path})
+
+    def _emit(self, title: str, content: str) -> None:
+        emit_tool_event(self.on_stream, node="yaml_repair", title=title, content=content)
 
     def outline(self) -> dict[str, Any]:
         scenes = self.payload.get("scenes")
@@ -525,9 +538,14 @@ class ScriptYamlToolRepairer:
     def __init__(self, model: BaseChatModel) -> None:
         self.model = model
 
-    def repair(self, yaml_content: str, validation_error: str) -> ScriptYamlRepairResult:
+    def repair(
+        self,
+        yaml_content: str,
+        validation_error: str,
+        on_stream: StreamCallback | None = None,
+    ) -> ScriptYamlRepairResult:
         payload, _ = parse_yaml_content(yaml_content)
-        document_tools = _YamlDocumentTools(payload)
+        document_tools = _YamlDocumentTools(payload, on_stream=on_stream)
         tools = self._build_tools(document_tools)
         graph = self._build_graph(document_tools, tools)
         final_state = graph.invoke(
@@ -537,6 +555,7 @@ class ScriptYamlToolRepairer:
                 "repair_attempts": 0,
                 "operation_count": 0,
                 "last_validated_operation_count": 0,
+                "on_stream": on_stream,
             },
             {"recursion_limit": TOOL_CALL_LIMIT * 4},
         )
@@ -639,7 +658,13 @@ class ScriptYamlToolRepairer:
 def _call_model_node(model: BaseChatModel):
     def node(state: ScriptYamlRepairState) -> ScriptYamlRepairState:
         try:
-            response = model.invoke(state["messages"])
+            response = invoke_model(
+                model,
+                state["messages"],
+                on_stream=state.get("on_stream"),
+                node="yaml_repair",
+                title="YAML 修复 Agent 输出",
+            )
         except Exception as exc:
             raise LLMResponseError(f"AI YAML 修复服务调用失败：{exc}") from exc
         return {"messages": [response]}
@@ -659,6 +684,12 @@ def _validate_yaml_node(document_tools: _YamlDocumentTools):
         operation_count = int(state.get("operation_count", 0))
         try:
             yaml_content = normalize_script_yaml_payload(document_tools.payload)
+            emit_tool_event(
+                document_tools.on_stream,
+                node="yaml_repair",
+                title="YAML 校验通过",
+                content=f"已完成 {operation_count} 次局部写入。",
+            )
             return {
                 "result": ScriptYamlRepairResult(yaml_content=yaml_content, operations=document_tools.operations),
                 "last_validated_operation_count": operation_count,
@@ -667,6 +698,13 @@ def _validate_yaml_node(document_tools: _YamlDocumentTools):
             repair_attempts = int(state.get("repair_attempts", 0)) + 1
             if repair_attempts >= REPAIR_LIMIT:
                 raise LLMResponseError(f"AI YAML 修复后仍未通过校验：{exc}") from exc
+            emit_tool_event(
+                document_tools.on_stream,
+                node="yaml_repair",
+                title="YAML 校验未通过",
+                content=f"第 {repair_attempts}/{REPAIR_LIMIT} 轮：{exc}",
+                event_type="tool_error",
+            )
             return {
                 "validation_error": str(exc),
                 "repair_attempts": repair_attempts,

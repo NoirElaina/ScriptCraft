@@ -1,53 +1,50 @@
-const AUTH_TOKEN_KEY = 'scriptcraft.auth.token'
+import axios, { type AxiosRequestConfig } from 'axios'
 
-export function getAuthToken(): string {
-  return window.localStorage.getItem(AUTH_TOKEN_KEY) ?? ''
-}
-
-export function setAuthToken(token: string): void {
-  window.localStorage.setItem(AUTH_TOKEN_KEY, token)
-}
-
-export function clearAuthToken(): void {
-  window.localStorage.removeItem(AUTH_TOKEN_KEY)
-}
+export const apiClient = axios.create({
+  baseURL: '/',
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
 
 export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const token = getAuthToken()
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  })
-
-  const responseText = await response.text()
-  const payload = responseText ? parseResponsePayload(responseText) : undefined
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      clearAuthToken()
-    }
-    const message =
-      typeof payload === 'object' && payload !== null && 'detail' in payload
-        ? String(payload.detail)
-        : responseText || '请求失败'
-    throw new Error(message)
+  try {
+    const response = await apiClient.request<T>({
+      url,
+      method: init.method ?? 'GET',
+      data: parseRequestBody(init.body),
+      headers: init.headers as AxiosRequestConfig['headers'],
+      signal: init.signal ?? undefined,
+    })
+    return response.data
+  } catch (error) {
+    throw new Error(readRequestErrorMessage(error))
   }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return payload as T
 }
 
-function parseResponsePayload(text: string): unknown {
+function parseRequestBody(body: BodyInit | null | undefined): unknown {
+  if (body === undefined || body === null) return undefined
+  if (typeof body !== 'string') return body
+
   try {
-    return JSON.parse(text)
+    return JSON.parse(body)
   } catch {
-    return text
+    return body
   }
+}
+
+function readRequestErrorMessage(error: unknown): string {
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error ? error.message : '请求失败'
+  }
+
+  const payload = error.response?.data
+  if (payload && typeof payload === 'object' && 'detail' in payload) {
+    return String(payload.detail)
+  }
+  if (typeof payload === 'string' && payload) {
+    return payload
+  }
+  return error.message || '请求失败'
 }
