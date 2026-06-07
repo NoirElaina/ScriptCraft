@@ -93,9 +93,9 @@ export function buildStoryboardScenes(input: {
         actors,
         frames: storyboardScene.timeline.map((shot, shotIndex) => {
           const sourceBeat = beatById.get(shot.source_beat_id)
+          const type = normalizeShotType(shot.type)
           const speakerId = shot.dialogue?.speaker_id || sourceBeat?.speaker_id || ''
           const speaker = speakerId ? characterById.get(speakerId) : undefined
-          const type = normalizeShotType(shot.type)
           const content =
             type === 'dialogue'
               ? shot.dialogue?.text || sourceBeat?.content || ''

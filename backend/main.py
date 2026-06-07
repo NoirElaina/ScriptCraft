@@ -1,11 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 import uvicorn
 
 from auth.router import router as auth_router
+from projects import pipeline_service
 from projects.router import router as projects_router
 
 
-app = FastAPI(title="ScriptCraft API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    pipeline_service.mark_interrupted_ai_runs_on_startup()
+    yield
+
+
+app = FastAPI(title="ScriptCraft API", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(projects_router)
 

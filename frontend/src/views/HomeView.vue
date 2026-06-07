@@ -15,6 +15,7 @@ import {
   getProjectWorkspace,
   listProjects,
   parseProjectChapters,
+  repairProjectScriptYaml,
   saveProjectScriptVersion,
   startProjectChapterAnalysisJob,
   startProjectScriptYamlJob,
@@ -31,14 +32,23 @@ import UserAccountMenu from '@/components/auth/UserAccountMenu.vue'
 import ChapterPanel from '@/components/workspace/ChapterPanel.vue'
 import EmptyProjectState from '@/components/workspace/EmptyProjectState.vue'
 import NovelEditorPanel from '@/components/workspace/NovelEditorPanel.vue'
-import PipelinePanel from '@/components/workspace/PipelinePanel.vue'
 import ProjectSwitcher from '@/components/workspace/ProjectSwitcher.vue'
+import ScriptResultPanel from '@/components/workspace/ScriptResultPanel.vue'
+import StoryGraphPanel from '@/components/workspace/StoryGraphPanel.vue'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { normalizeNovelText } from '@/lib/novel-text'
+import { formatTime, runStatusClass, taskLabel } from '@/lib/workspace-formatters'
 
 const ACTIVE_PROJECT_STORAGE_PREFIX = 'scriptcraft.activeProjectId'
 const WORKSPACE_POLL_INTERVAL_MS = 1800
+const WORKSPACE_POLL_MAX_FAILURES = 3
 
 const currentUser = ref<AuthUser>()
 const projects = ref<ProjectListItem[]>([])
@@ -47,8 +57,11 @@ const projectTitle = ref('未命名小说')
 const newProjectTitle = ref('')
 const novelText = ref('')
 const selectedChapterId = ref<string>()
-const activeFlowTab = ref('pipeline')
 const activeYamlTab = ref('preview')
+const repairedYamlContent = ref('')
+const repairedYamlRevision = ref(0)
+const isNovelInputOpen = ref(false)
+const isRunHistoryOpen = ref(false)
 
 const isLoadingProjects = ref(false)
 const isCreatingProject = ref(false)
@@ -58,6 +71,7 @@ const isParsing = ref(false)
 const isAnalyzingChapters = ref(false)
 const isExtracting = ref(false)
 const isGeneratingYaml = ref(false)
+const isRepairingYaml = ref(false)
 const isSavingYaml = ref(false)
 const isDeletingProject = ref(false)
 const isCheckingAuth = ref(true)
@@ -112,7 +126,7 @@ const isChapterAnalysisBusy = computed(() => isAnalyzingChapters.value || isBack
 const isStoryElementsBusy = computed(() => isExtracting.value || isBackendExtractingStoryElements.value)
 const isScriptYamlBusy = computed(() => isGeneratingYaml.value || isBackendGeneratingScriptYaml.value)
 const isLocalAiTaskRunning = computed(() => {
-  return isAnalyzingChapters.value || isExtracting.value || isGeneratingYaml.value
+  return isAnalyzingChapters.value || isExtracting.value || isGeneratingYaml.value || isRepairingYaml.value
 })
 const isBackendAiTaskRunning = computed(() => {
   return (
@@ -128,6 +142,7 @@ const editorErrorMessage = computed(() => {
 })
 
 let workspacePollTimer: number | undefined
+let workspacePollFailureCount = 0
 const isPollingWorkspace = ref(false)
 
 onMounted(() => {
@@ -188,7 +203,14 @@ async function handleLogout() {
 }
 
 function showAiRunHistory() {
-  activeFlowTab.value = 'pipeline'
+  isRunHistoryOpen.value = true
+}
+
+function openNovelInputDialog() {
+  projectTitle.value = currentProject.value?.title ?? '未命名小说'
+  novelText.value = ''
+  pipelineErrorMessage.value = ''
+  isNovelInputOpen.value = true
 }
 
 async function loadProjectList(): Promise<ProjectListItem[]> {
@@ -259,13 +281,19 @@ async function refreshWorkspaceSnapshot(projectId: number) {
   isPollingWorkspace.value = true
   try {
     const result = await getProjectWorkspace(projectId)
+    workspacePollFailureCount = 0
     if (currentProject.value?.id === projectId || !currentProject.value) {
       applyWorkspace(result, { preserveSelectedChapter: true })
       rememberActiveProject(result.project.id)
     }
     await loadProjectList()
   } catch (error) {
+    workspacePollFailureCount += 1
     workspaceErrorMessage.value = error instanceof Error ? error.message : '工作台状态同步失败'
+    if (workspacePollFailureCount >= WORKSPACE_POLL_MAX_FAILURES) {
+      stopWorkspacePolling()
+      workspaceErrorMessage.value = '后端连接中断，已停止自动同步。请确认服务恢复后手动刷新。'
+    }
   } finally {
     isPollingWorkspace.value = false
   }
@@ -273,6 +301,7 @@ async function refreshWorkspaceSnapshot(projectId: number) {
 
 function startWorkspacePolling(projectId: number) {
   stopWorkspacePolling()
+  workspacePollFailureCount = 0
   workspacePollTimer = window.setInterval(() => {
     void refreshWorkspaceSnapshot(projectId)
   }, WORKSPACE_POLL_INTERVAL_MS)
@@ -283,6 +312,7 @@ function stopWorkspacePolling() {
 
   window.clearInterval(workspacePollTimer)
   workspacePollTimer = undefined
+  workspacePollFailureCount = 0
 }
 
 async function handleSaveProject() {
@@ -348,6 +378,7 @@ async function handleParseProjectChapters() {
     const result = await parseProjectChapters(project.id, sourceText)
     selectedChapterId.value = result.chapters[0]?.id
     await refreshWorkspace()
+    isNovelInputOpen.value = false
   } catch (error) {
     pipelineErrorMessage.value = error instanceof Error ? error.message : '章节解析失败'
   } finally {
@@ -361,7 +392,6 @@ async function handleAnalyzeProjectChapters() {
 
   pipelineErrorMessage.value = ''
   isAnalyzingChapters.value = true
-  activeFlowTab.value = 'pipeline'
 
   try {
     await startProjectChapterAnalysisJob(project.id)
@@ -380,7 +410,6 @@ async function handleExtractStoryElements() {
 
   pipelineErrorMessage.value = ''
   isExtracting.value = true
-  activeFlowTab.value = 'pipeline'
 
   try {
     await startProjectStoryElementsJob(project.id)
@@ -426,7 +455,6 @@ async function handleSaveScriptYaml(yamlContent: string, versionName: string) {
     if (workspace.value && workspace.value.project.id === project.id) {
       workspace.value = { ...workspace.value, script_version: result.script_version }
     }
-    activeFlowTab.value = 'yaml'
     activeYamlTab.value = 'preview'
     await loadProjectList()
   } catch (error) {
@@ -436,14 +464,46 @@ async function handleSaveScriptYaml(yamlContent: string, versionName: string) {
   }
 }
 
+async function handleRepairScriptYaml(yamlContent: string, validationError: string) {
+  const project = currentProject.value
+  if (!project) return
+
+  pipelineErrorMessage.value = ''
+  isRepairingYaml.value = true
+
+  try {
+    const result = await repairProjectScriptYaml(project.id, {
+      yaml_content: yamlContent,
+      validation_error: validationError,
+    })
+    repairedYamlContent.value = result.yaml_content
+    repairedYamlRevision.value += 1
+    activeYamlTab.value = 'source'
+    if (workspace.value && workspace.value.project.id === project.id) {
+      const aiRuns = [result.ai_run, ...workspace.value.ai_runs.filter((run) => run.id !== result.ai_run.id)].slice(0, 20)
+      workspace.value = { ...workspace.value, script_version: result.script_version, ai_runs: aiRuns }
+    }
+    await loadProjectList()
+  } catch (error) {
+    pipelineErrorMessage.value = error instanceof Error ? error.message : '剧本 YAML 修复失败'
+  } finally {
+    isRepairingYaml.value = false
+  }
+}
+
 function applyWorkspace(
   result: ProjectWorkspaceResponse,
   options: { preserveSelectedChapter?: boolean } = {},
 ) {
   const previousSelectedChapterId = selectedChapterId.value
+  const previousProjectId = workspace.value?.project.id
   workspace.value = result
   projectTitle.value = result.project.title
   novelText.value = normalizeNovelText(result.project.source_text)
+  if (previousProjectId !== result.project.id) {
+    repairedYamlContent.value = ''
+    repairedYamlRevision.value = 0
+  }
   selectedChapterId.value =
     options.preserveSelectedChapter &&
     previousSelectedChapterId &&
@@ -469,8 +529,9 @@ function resetWorkspace() {
   newProjectTitle.value = ''
   novelText.value = ''
   selectedChapterId.value = undefined
-  activeFlowTab.value = 'pipeline'
   activeYamlTab.value = 'preview'
+  repairedYamlContent.value = ''
+  repairedYamlRevision.value = 0
   projectErrorMessage.value = ''
   workspaceErrorMessage.value = ''
   pipelineErrorMessage.value = ''
@@ -530,7 +591,7 @@ function forgetActiveProject(projectId?: number) {
 <template>
   <main class="h-screen overflow-hidden bg-muted/30 text-foreground">
     <section
-      class="mx-auto flex h-full w-full max-w-[1700px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8"
+      class="mx-auto flex h-full w-full max-w-[1900px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8"
     >
       <header
         class="shrink-0 flex flex-col gap-3 border-b bg-background/80 pb-4 sm:flex-row sm:items-center sm:justify-between"
@@ -588,51 +649,100 @@ function forgetActiveProject(projectId?: number) {
 
         <EmptyProjectState v-else-if="!currentProject" />
 
-        <div v-else class="grid h-full min-h-0 gap-4 xl:grid-cols-[420px_minmax(0,1fr)_420px]">
-          <NovelEditorPanel
-            v-model:project-title="projectTitle"
-            v-model:novel-text="novelText"
-            :current-project-title="currentProject.title"
-            :error-message="editorErrorMessage"
-            :is-loading-workspace="isLoadingWorkspace"
-            :is-parsing="isParsing"
-            :is-saving-project="isSavingProject"
-            @parse-chapters="handleParseProjectChapters"
-            @save-project="handleSaveProject"
-            @clear-draft="clearDraftText"
-          />
-
+        <div v-else class="grid h-full min-h-0 gap-4 xl:grid-cols-[500px_minmax(0,1fr)_400px]">
           <ChapterPanel
             v-model:selected-chapter-id="selectedChapterId"
             :chapters="chapters"
             :chapter-analyses="chapterAnalyses"
             :chapter-coverage-label="chapterCoverageLabel"
-          />
-
-          <PipelinePanel
-            v-model:active-flow-tab="activeFlowTab"
-            v-model:active-yaml-tab="activeYamlTab"
-            :chapters-length="chapters.length"
-            :chapter-analyses-length="chapterAnalyses.length"
             :story-elements="storyElements"
-            :script-yaml="scriptYaml"
-            :project-title="currentProject.title"
             :script-version-name="scriptVersionName"
             :ai-runs="aiRuns"
-            :is-loading-workspace="isLoadingWorkspace"
             :is-analyzing-chapters="isChapterAnalysisBusy"
             :is-extracting="isStoryElementsBusy"
             :is-generating-yaml="isScriptYamlBusy"
             :is-ai-task-running="isAiTaskRunning"
-            :is-saving-yaml="isSavingYaml"
-            @refresh="refreshWorkspace"
+            @open-novel-input="openNovelInputDialog"
             @analyze-chapters="handleAnalyzeProjectChapters"
             @extract-story-elements="handleExtractStoryElements"
             @generate-script-yaml="handleGenerateScriptYaml"
+          />
+
+          <StoryGraphPanel :story-elements="storyElements" />
+
+          <ScriptResultPanel
+            v-model:active-yaml-tab="activeYamlTab"
+            :script-yaml="scriptYaml"
+            :project-title="currentProject.title"
+            :script-version-name="scriptVersionName"
+            :has-story-elements="Boolean(storyElements) && !isAiTaskRunning"
+            :is-loading-workspace="isLoadingWorkspace"
+            :is-generating-yaml="isScriptYamlBusy"
+            :is-saving-yaml="isSavingYaml"
+            :is-repairing-yaml="isRepairingYaml"
+            :error-message="pipelineErrorMessage"
+            :repaired-yaml-content="repairedYamlContent"
+            :repaired-yaml-revision="repairedYamlRevision"
+            @refresh="refreshWorkspace"
+            @generate-script-yaml="handleGenerateScriptYaml"
             @save-script-yaml="handleSaveScriptYaml"
+            @repair-script-yaml="handleRepairScriptYaml"
           />
         </div>
       </div>
     </section>
+
+    <Dialog v-model:open="isNovelInputOpen">
+      <DialogContent
+        class="h-[min(880px,calc(100vh-2rem))] !w-[min(1100px,calc(100vw-3rem))] !max-w-none overflow-hidden p-0"
+      >
+        <NovelEditorPanel
+          v-if="currentProject"
+          class="h-full border-0 shadow-none"
+          v-model:project-title="projectTitle"
+          v-model:novel-text="novelText"
+          :current-project-title="currentProject.title"
+          :error-message="editorErrorMessage"
+          :is-loading-workspace="isLoadingWorkspace"
+          :is-parsing="isParsing"
+          :is-saving-project="isSavingProject"
+          readonly-title
+          :show-save-project="false"
+          @parse-chapters="handleParseProjectChapters"
+          @save-project="handleSaveProject"
+          @clear-draft="clearDraftText"
+        />
+      </DialogContent>
+    </Dialog>
+
+    <Dialog v-model:open="isRunHistoryOpen">
+      <DialogContent class="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>AI 运行记录</DialogTitle>
+          <DialogDescription>当前项目最近的 AI 任务状态。</DialogDescription>
+        </DialogHeader>
+
+        <div class="max-h-[560px] space-y-3 overflow-y-auto pr-1">
+          <div v-if="aiRuns.length === 0" class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+            暂无运行记录。
+          </div>
+          <div v-for="run in aiRuns" :key="run.id" class="rounded-lg border bg-background p-3">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-sm font-medium">{{ taskLabel(run.task_type) }}</p>
+              <span class="rounded border px-2 py-0.5 text-xs" :class="runStatusClass(run.status)">
+                {{ run.status }}
+              </span>
+            </div>
+            <p class="mt-1 text-xs text-muted-foreground">
+              {{ formatTime(run.created_at) }}
+              <span v-if="run.duration_ms !== null"> · {{ run.duration_ms }}ms</span>
+            </p>
+            <p v-if="run.error_message" class="mt-2 text-xs leading-5 text-destructive">
+              {{ run.error_message }}
+            </p>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   </main>
 </template>

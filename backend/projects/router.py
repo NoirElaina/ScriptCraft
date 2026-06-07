@@ -14,6 +14,8 @@ from .schemas import (
     ProjectChaptersResponse,
     ProjectListResponse,
     ProjectResponse,
+    ProjectScriptYamlRepairRequest,
+    ProjectScriptYamlRepairResponse,
     ProjectScriptVersionRequest,
     ProjectScriptVersionResponse,
     ProjectUpdateRequest,
@@ -185,6 +187,21 @@ def save_project_script_version(
     except service.ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except LLMResponseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{project_id}/script-yaml/repair", response_model=ProjectScriptYamlRepairResponse)
+def repair_project_script_yaml(
+    project_id: int,
+    request: ProjectScriptYamlRepairRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ProjectScriptYamlRepairResponse:
+    try:
+        return pipeline_service.repair_script_yaml(session, project_id, current_user.id, request)
+    except service.ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except pipeline_service.ProjectPipelineError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

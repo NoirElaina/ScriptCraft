@@ -128,6 +128,11 @@ class ProjectScriptVersionRequest(BaseModel):
     yaml_content: str = Field(min_length=1)
 
 
+class ProjectScriptYamlRepairRequest(BaseModel):
+    yaml_content: str = Field(min_length=1)
+    validation_error: str = Field(min_length=1)
+
+
 class ProjectScriptVersionResponse(BaseModel):
     project_id: int
     title: str
@@ -152,6 +157,15 @@ class AIRunResponse(BaseModel):
 class ProjectAITaskJobResponse(BaseModel):
     project_id: int
     title: str
+    ai_run: AIRunResponse
+
+
+class ProjectScriptYamlRepairResponse(BaseModel):
+    project_id: int
+    title: str
+    yaml_content: str
+    operations: list[dict]
+    script_version: ScriptVersionResponse
     ai_run: AIRunResponse
 
 

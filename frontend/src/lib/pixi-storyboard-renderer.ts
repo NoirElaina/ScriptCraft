@@ -249,6 +249,8 @@ export class PixiStoryboardRenderer {
 
     if (frame.type === 'dialogue' && frame.speakerId) {
       this.drawSpeechBubble(frame)
+    } else if (frame.type === 'narration') {
+      this.drawNarrationCaption(frame)
     } else {
       this.drawActionCaption(frame)
     }
@@ -362,8 +364,15 @@ export class PixiStoryboardRenderer {
     const speaker = this.actorDisplays.get(frame.speakerId)
     if (!speaker) return
 
-    const bubbleWidth = 388
-    const bubbleHeight = 118
+    const bubbleWidth = 420
+    const contentWidth = bubbleWidth - 42
+    const fittedContent = fitWrappedText(frame.content, {
+      width: contentWidth,
+      maxHeight: 148,
+      fill: 0x0f172a,
+      sizes: [20, 18, 16, 15],
+    })
+    const bubbleHeight = clamp(fittedContent.height + 72, 118, 220)
     const bubbleX = clamp(speaker.baseX - bubbleWidth / 2, 102, WORLD_WIDTH - bubbleWidth - 102)
     const bubbleY = clamp(speaker.baseY - ACTOR_RADIUS - bubbleHeight - 28, 144, STAGE_BOTTOM - bubbleHeight - 72)
 
@@ -392,10 +401,10 @@ export class PixiStoryboardRenderer {
       style: {
         fill: 0x0f172a,
         fontFamily: 'Inter, Arial, sans-serif',
-        fontSize: 20,
-        lineHeight: 30,
+        fontSize: fittedContent.fontSize,
+        lineHeight: fittedContent.lineHeight,
         wordWrap: true,
-        wordWrapWidth: bubbleWidth - 36,
+        wordWrapWidth: contentWidth,
         breakWords: true,
       },
     })
@@ -409,7 +418,7 @@ export class PixiStoryboardRenderer {
 
     gsap.to(bubble, { alpha: 1, duration: 0.16, ease: 'power2.out' })
     gsap.to(bubble.scale, { x: 1, y: 1, duration: 0.24, ease: 'back.out(1.6)' })
-    this.typeText(content, frame.content, frame.durationMs)
+    this.typeText(content, fittedContent.text, frame.durationMs)
   }
 
   private drawActionCaption(frame: StoryboardFrame): void {
@@ -459,6 +468,52 @@ export class PixiStoryboardRenderer {
     this.typeText(content, frame.content, frame.durationMs)
   }
 
+  private drawNarrationCaption(frame: StoryboardFrame): void {
+    if (!frame.content) return
+
+    const width = WORLD_WIDTH - 284
+    const height = 72
+    const x = 142
+    const y = STAGE_BOTTOM + 22
+
+    const card = new Container()
+    const shape = new Graphics()
+    shape.roundRect(0, 0, width, height, 18).fill({ color: 0xffffff, alpha: 0.9 })
+    shape.roundRect(0, 0, width, height, 18).stroke({ color: shotColor(frame.type), alpha: 0.28, width: 2 })
+
+    const label = new Text({
+      text: '旁白',
+      style: {
+        fill: shotColor(frame.type),
+        fontFamily: 'Inter, Arial, sans-serif',
+        fontSize: 15,
+        fontWeight: '700',
+      },
+    })
+    label.position.set(18, 12)
+
+    const content = new Text({
+      text: '',
+      style: {
+        fill: 0x334155,
+        fontFamily: 'Inter, Arial, sans-serif',
+        fontSize: 19,
+        lineHeight: 27,
+        wordWrap: true,
+        wordWrapWidth: width - 124,
+        breakWords: true,
+      },
+    })
+    content.position.set(74, 22)
+
+    card.position.set(x, y)
+    card.alpha = 0
+    card.addChild(shape, label, content)
+    this.overlayLayer.addChild(card)
+    gsap.to(card, { alpha: 1, duration: 0.18, ease: 'power2.out' })
+    this.typeText(content, frame.content, frame.durationMs)
+  }
+
   private typeText(target: Text, text: string, durationMs: number): void {
     const source = text.trim()
     if (!source) return
@@ -483,8 +538,8 @@ export class PixiStoryboardRenderer {
     const width = WORLD_WIDTH - 284
     const progress = this.scene.frames.length === 0 ? 0 : (this.frameIndex + 1) / this.scene.frames.length
     const track = new Graphics()
-    track.roundRect(142, 622, width, 8, 999).fill({ color: 0xe2e8f0, alpha: 0.9 })
-    track.roundRect(142, 622, width * progress, 8, 999).fill({ color: shotColor(frame.type), alpha: 0.9 })
+    track.roundRect(142, 666, width, 8, 999).fill({ color: 0xe2e8f0, alpha: 0.9 })
+    track.roundRect(142, 666, width * progress, 8, 999).fill({ color: shotColor(frame.type), alpha: 0.9 })
     this.overlayLayer.addChild(track)
   }
 }
@@ -586,6 +641,76 @@ function shotColor(type: string): number {
     sound: 0xdc2626,
   }
   return colors[type] ?? 0x475569
+}
+
+function fitWrappedText(
+  text: string,
+  options: {
+    width: number
+    maxHeight: number
+    fill: number
+    sizes: number[]
+  },
+): { text: string; fontSize: number; lineHeight: number; height: number } {
+  const source = text.trim()
+  if (!source) {
+    return { text: '', fontSize: options.sizes[0] ?? 18, lineHeight: 26, height: 0 }
+  }
+
+  for (const fontSize of options.sizes) {
+    const lineHeight = Math.round(fontSize * 1.45)
+    const height = measureWrappedTextHeight(source, options.width, fontSize, lineHeight, options.fill)
+    if (height <= options.maxHeight) {
+      return { text: source, fontSize, lineHeight, height }
+    }
+  }
+
+  const fontSize = options.sizes.at(-1) ?? 15
+  const lineHeight = Math.round(fontSize * 1.45)
+  let left = 0
+  let right = source.length
+  let fittedText = source.slice(0, 1)
+  let fittedHeight = measureWrappedTextHeight(fittedText, options.width, fontSize, lineHeight, options.fill)
+
+  while (left <= right) {
+    const middle = Math.floor((left + right) / 2)
+    const candidate = `${source.slice(0, middle).trimEnd()}…`
+    const height = measureWrappedTextHeight(candidate, options.width, fontSize, lineHeight, options.fill)
+
+    if (height <= options.maxHeight) {
+      fittedText = candidate
+      fittedHeight = height
+      left = middle + 1
+    } else {
+      right = middle - 1
+    }
+  }
+
+  return { text: fittedText, fontSize, lineHeight, height: fittedHeight }
+}
+
+function measureWrappedTextHeight(
+  text: string,
+  width: number,
+  fontSize: number,
+  lineHeight: number,
+  fill: number,
+): number {
+  const measurement = new Text({
+    text,
+    style: {
+      fill,
+      fontFamily: 'Inter, Arial, sans-serif',
+      fontSize,
+      lineHeight,
+      wordWrap: true,
+      wordWrapWidth: width,
+      breakWords: true,
+    },
+  })
+  const height = measurement.height
+  measurement.destroy()
+  return height
 }
 
 function clamp(value: number, min: number, max: number): number {
