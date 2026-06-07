@@ -3,8 +3,9 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from llm.streaming import StreamCallback
 from .merger import ChapterStoryElementMerger
-from .store import apply_story_element_updates, empty_story_element_snapshot
+from .store import empty_story_element_snapshot
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -18,6 +19,7 @@ class StoryElementExtractor:
         title: str,
         chapters: Sequence[Mapping[str, Any]],
         on_progress: ProgressCallback | None = None,
+        on_stream: StreamCallback | None = None,
     ) -> dict[str, Any]:
         normalized_title = title.strip() or "未命名小说"
         snapshot = empty_story_element_snapshot()
@@ -26,8 +28,7 @@ class StoryElementExtractor:
 
         for offset, chapter in enumerate(sorted_chapters, start=1):
             _report_progress(on_progress, "chapter_processing", chapter, offset, chapter_total, offset - 1, snapshot)
-            updates = self.merger.merge(normalized_title, chapter, snapshot)
-            snapshot = apply_story_element_updates(snapshot, updates, chapter)
+            snapshot = self.merger.merge(normalized_title, chapter, snapshot, sorted_chapters, on_stream=on_stream)
             _report_progress(on_progress, "chapter_completed", chapter, offset, chapter_total, offset, snapshot)
 
         _report_progress(on_progress, "finished", None, chapter_total, chapter_total, chapter_total, snapshot)
@@ -36,6 +37,7 @@ class StoryElementExtractor:
             "characters": snapshot["characters"],
             "locations": snapshot["locations"],
             "events": snapshot["events"],
+            "scenes": snapshot["scenes"],
         }
 
 
@@ -68,6 +70,7 @@ def _report_progress(
             "character_count": len(snapshot["characters"]),
             "location_count": len(snapshot["locations"]),
             "event_count": len(snapshot["events"]),
+            "scene_count": len(snapshot["scenes"]),
             "message": _progress_message(phase, chapter_index, chapter_total, current_title),
         }
     )

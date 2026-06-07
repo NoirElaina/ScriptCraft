@@ -1,4 +1,3 @@
-from .auth_session import AuthSession
 from .ai_run import AIRun
 from .chapter import Chapter
 from .chapter_analysis import ChapterAnalysis
@@ -9,7 +8,6 @@ from .user import User
 
 __all__ = [
     "AIRun",
-    "AuthSession",
     "Chapter",
     "ChapterAnalysis",
     "Project",

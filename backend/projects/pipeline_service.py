@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from chapter_analysis import ChapterAnalyzer
-from chapter_parser import ChapterParseError, ChapterParser
+from chapter_parser import ChapterParseError, ChapterParser, parse_chapter_heading_index
 from database.session import get_session_factory
 from llm import LLMConfigError, LLMResponseError, create_chat_model_from_env
 from models.ai_run import AIRun
@@ -65,8 +65,8 @@ def parse_and_save_chapters(
     except ChapterParseError:
         raise
 
-    project.source_text = source_text
     chapters = _sync_project_chapters(session, project, parsed_chapters)
+    project.source_text = ""
     project.status = _chapter_parse_status(session, project.id, chapters)
     session.commit()
     session.refresh(project)
@@ -191,6 +191,7 @@ def run_chapter_analysis_job(
 
             model = model_factory()
             analyzer = ChapterAnalyzer(model)
+            on_stream = _make_ai_run_stream_callback(session, ai_run)
 
             for chapter in chapters:
                 existing_analysis = analyses_by_chapter_id.get(chapter.id)
@@ -213,6 +214,7 @@ def run_chapter_analysis_job(
                     project.title,
                     _chapter_payload(chapter),
                     memory=_chapter_analysis_memory(output_payloads),
+                    on_stream=on_stream,
                 )
 
                 output_payloads.append(analysis_payload)
@@ -305,10 +307,12 @@ def run_story_elements_job(
             project = get_project(session, project_id, owner_id)
             chapters = _require_chapter_analysis_contexts(session, project)
             model = model_factory()
+            on_stream = _make_ai_run_stream_callback(session, ai_run)
             result = StoryElementExtractor(model).extract(
                 project.title,
                 chapters,
                 on_progress=lambda progress: _update_ai_run_progress(session, ai_run, progress),
+                on_stream=on_stream,
             )
 
             story_element = StoryElement(
@@ -316,6 +320,7 @@ def run_story_elements_job(
                 characters=result["characters"],
                 locations=result["locations"],
                 events=result["events"],
+                scenes=result["scenes"],
             )
             project.status = "story_elements_ready"
             session.add(story_element)
@@ -385,13 +390,16 @@ def run_script_yaml_job(
             chapters = _require_chapter_analysis_contexts(session, project)
             story_element = _require_latest_story_elements(session, project)
             model = model_factory()
+            on_stream = _make_ai_run_stream_callback(session, ai_run)
             yaml_content = ScriptYamlGenerator(model).generate(
                 title=project.title,
                 chapters=chapters,
                 characters=story_element.characters,
                 locations=story_element.locations,
                 events=story_element.events,
+                scene_cards=story_element.scenes,
                 on_progress=lambda progress: _update_ai_run_progress(session, ai_run, progress),
+                on_stream=on_stream,
             )
 
             script_version = ScriptVersion(
@@ -469,9 +477,11 @@ def repair_script_yaml(
     started_at = perf_counter()
 
     try:
+        on_stream = _make_ai_run_stream_callback(session, ai_run)
         result = ScriptYamlToolRepairer(model_factory()).repair(
             yaml_content=request.yaml_content,
             validation_error=request.validation_error,
+            on_stream=on_stream,
         )
         script_version = ScriptVersion(
             project_id=project.id,
@@ -568,12 +578,10 @@ def _list_chapters(session: Session, project_id: int) -> list[Chapter]:
 
 
 def _sync_project_chapters(session: Session, project: Project, parsed_chapters) -> list[Chapter]:
-    existing_chapters = _list_chapters(session, project.id)
+    existing_chapters = _normalize_existing_chapter_indexes(session, _list_chapters(session, project.id))
     existing_by_index = {chapter.chapter_index: chapter for chapter in existing_chapters}
-    parsed_indexes: set[int] = set()
 
     for parsed_chapter in parsed_chapters:
-        parsed_indexes.add(parsed_chapter.index)
         existing_chapter = existing_by_index.get(parsed_chapter.index)
         if existing_chapter is None:
             session.add(
@@ -597,12 +605,35 @@ def _sync_project_chapters(session: Session, project: Project, parsed_chapters) 
         existing_chapter.content = parsed_chapter.content
         session.add(existing_chapter)
 
-    for chapter in existing_chapters:
-        if chapter.chapter_index not in parsed_indexes:
-            session.delete(chapter)
-
     session.flush()
     return _list_chapters(session, project.id)
+
+
+def _normalize_existing_chapter_indexes(session: Session, chapters: list[Chapter]) -> list[Chapter]:
+    existing_by_index = {chapter.chapter_index: chapter for chapter in chapters}
+    changed = False
+
+    for chapter in chapters:
+        parsed_index = parse_chapter_heading_index(chapter.heading)
+        if parsed_index <= 0 or parsed_index == chapter.chapter_index:
+            continue
+
+        existing = existing_by_index.get(parsed_index)
+        if existing is not None and existing.id != chapter.id:
+            raise ProjectPipelineError(f"章节编号冲突：{chapter.heading} 与 {existing.heading}")
+
+        existing_by_index.pop(chapter.chapter_index, None)
+        chapter.chapter_index = parsed_index
+        chapter.chapter_key = f"chapter_{parsed_index:03d}"
+        session.add(chapter)
+        existing_by_index[parsed_index] = chapter
+        changed = True
+
+    if changed:
+        session.flush()
+        return _list_chapters(session, chapters[0].project_id)
+
+    return chapters
 
 
 def _chapter_content_changed(chapter: Chapter, parsed_chapter) -> bool:
@@ -615,7 +646,7 @@ def _chapter_content_changed(chapter: Chapter, parsed_chapter) -> bool:
 
 
 def _chapter_parse_status(session: Session, project_id: int, chapters: list[Chapter]) -> str:
-    if len(chapters) < 3:
+    if not chapters:
         return "chapters_ready"
 
     analyses = _chapter_analysis_by_chapter_id(session, project_id)
@@ -633,8 +664,8 @@ def _get_project_for_ai_task(session: Session, project_id: int, owner_id: int) -
 
 def _require_chapters(session: Session, project: Project) -> list[Chapter]:
     chapters = _list_chapters(session, project.id)
-    if len(chapters) < 3:
-        raise ProjectPipelineError("项目至少需要先保存 3 个章节")
+    if not chapters:
+        raise ProjectPipelineError("项目需要先保存章节")
     return chapters
 
 
@@ -741,6 +772,7 @@ def _script_yaml_input_payload(
         "character_count": len(story_element.characters),
         "location_count": len(story_element.locations),
         "event_count": len(story_element.events),
+        "scene_count": len(story_element.scenes),
     }
 
 
@@ -799,11 +831,18 @@ def _list_chapter_analyses(session: Session, project_id: int) -> list[ChapterAna
 def _require_chapter_analysis_contexts(session: Session, project: Project) -> list[dict[str, Any]]:
     chapters = _list_chapters(session, project.id)
     analyses = _list_chapter_analyses(session, project.id)
-    if len(chapters) < 3:
-        raise ProjectPipelineError("项目至少需要先保存 3 个章节")
+    if not chapters:
+        raise ProjectPipelineError("项目需要先保存章节")
     if len(analyses) < len(chapters):
         raise ProjectPipelineError("项目需要先完成 AI 章节分析")
-    return [_chapter_analysis_context(analysis) for analysis in analyses]
+    chapters_by_id = {chapter.id: chapter for chapter in chapters}
+    contexts: list[dict[str, Any]] = []
+    for analysis in analyses:
+        chapter = chapters_by_id.get(analysis.chapter_id)
+        if chapter is None:
+            raise ProjectPipelineError("章节分析与章节记录不一致，请重新保存章节并分析")
+        contexts.append(_chapter_analysis_context(analysis, chapter))
+    return contexts
 
 
 def _latest_story_elements(session: Session, project_id: int) -> StoryElement | None:
@@ -895,12 +934,13 @@ def _chapter_analysis_response(analysis: ChapterAnalysis) -> ChapterAnalysisItem
     return ChapterAnalysisItemResponse.model_validate(analysis)
 
 
-def _chapter_analysis_context(analysis: ChapterAnalysis) -> dict[str, Any]:
+def _chapter_analysis_context(analysis: ChapterAnalysis, chapter: Chapter) -> dict[str, Any]:
     return {
         "id": analysis.chapter_key,
         "index": analysis.chapter_index,
-        "heading": analysis.analysis.get("heading", ""),
-        "title": analysis.analysis.get("title", ""),
+        "heading": chapter.heading,
+        "title": chapter.title,
+        "content": chapter.content,
         "summary": analysis.summary,
         "analysis": analysis.analysis,
     }
@@ -913,6 +953,7 @@ def _story_elements_response(story_element: StoryElement) -> StoryElementsSnapsh
         characters=story_element.characters,
         locations=story_element.locations,
         events=story_element.events,
+        scenes=story_element.scenes,
         created_at=story_element.created_at,
     )
 
@@ -941,7 +982,9 @@ def _finish_ai_run(
     ai_run.status = status
     ai_run.duration_ms = int((perf_counter() - started_at) * 1000)
     if output_payload is not None:
-        ai_run.output_payload = output_payload
+        payload = _ai_run_output_payload(ai_run)
+        payload.update(output_payload)
+        ai_run.output_payload = payload
     ai_run.error_message = error_message
     session.add(ai_run)
 
@@ -950,9 +993,61 @@ def _update_ai_run_progress(session: Session, ai_run: AIRun, progress: dict[str,
     if ai_run.status != "running":
         return
 
-    ai_run.output_payload = {"progress": dict(progress)}
+    payload = _ai_run_output_payload(ai_run)
+    payload["progress"] = dict(progress)
+    ai_run.output_payload = payload
     session.add(ai_run)
     session.commit()
+
+
+def _make_ai_run_stream_callback(session: Session, ai_run: AIRun) -> Callable[[dict[str, Any]], None]:
+    def callback(event: dict[str, Any]) -> None:
+        _append_ai_run_stream_event(session, ai_run, event)
+
+    return callback
+
+
+def _append_ai_run_stream_event(session: Session, ai_run: AIRun, event: dict[str, Any]) -> None:
+    if ai_run.status != "running":
+        return
+
+    payload = _ai_run_output_payload(ai_run)
+    stream = payload.get("stream")
+    if not isinstance(stream, list):
+        stream = []
+
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {
+        "id": len(stream) + 1,
+        "created_at": now,
+        "type": str(event.get("type") or "message"),
+        "node": str(event.get("node") or ""),
+        "title": str(event.get("title") or ""),
+        "content": str(event.get("content") or ""),
+    }
+
+    if (
+        event.get("append")
+        and stream
+        and stream[-1].get("type") == entry["type"]
+        and stream[-1].get("node") == entry["node"]
+        and stream[-1].get("title") == entry["title"]
+    ):
+        stream[-1]["content"] = str(stream[-1].get("content") or "") + entry["content"]
+        stream[-1]["created_at"] = now
+    else:
+        stream.append(entry)
+
+    payload["stream"] = stream[-100:]
+    ai_run.output_payload = payload
+    session.add(ai_run)
+    session.commit()
+
+
+def _ai_run_output_payload(ai_run: AIRun) -> dict[str, Any]:
+    if isinstance(ai_run.output_payload, dict):
+        return dict(ai_run.output_payload)
+    return {}
 
 
 def _task_failed_project_status(task_type: str) -> str:

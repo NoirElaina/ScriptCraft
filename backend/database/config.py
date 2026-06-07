@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-import yaml
+from app_config import AppConfigError, load_app_config
 
 
-class DatabaseConfigError(RuntimeError):
+class DatabaseConfigError(AppConfigError):
     pass
 
 
@@ -42,16 +41,10 @@ def _load_config_database_url() -> str:
 
 
 def _load_app_config() -> dict[str, Any]:
-    config_path = Path(__file__).resolve().parents[2] / "config" / "app.yml"
-    if not config_path.exists():
-        return {}
-
-    content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    if content is None:
-        return {}
-    if not isinstance(content, dict):
-        raise DatabaseConfigError("config/app.yml 顶层结构必须是对象。")
-    return content
+    try:
+        return load_app_config()
+    except AppConfigError as exc:
+        raise DatabaseConfigError(str(exc)) from exc
 
 
 def _build_database_url(database_config: dict[str, Any]) -> str:

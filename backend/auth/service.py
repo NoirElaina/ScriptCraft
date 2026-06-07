@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from dataclasses import dataclass
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from database.base import utc_now
-from models.auth_session import AuthSession
 from models.user import User
 from .schemas import AuthTokenResponse, LoginRequest, RegisterRequest, UserResponse
-from .security import create_session_token, hash_password, hash_session_token, verify_password
-
-
-SESSION_TTL = timedelta(days=30)
+from .security import JWTError, create_jwt_token, decode_jwt_token, hash_password, verify_password
+from .settings import load_auth_settings
 
 
 class AuthError(RuntimeError):
@@ -27,7 +24,13 @@ class InvalidCredentialsError(AuthError):
     pass
 
 
-def register_user(session: Session, request: RegisterRequest) -> AuthTokenResponse:
+@dataclass(frozen=True)
+class AuthLoginResult:
+    token: str
+    response: AuthTokenResponse
+
+
+def register_user(session: Session, request: RegisterRequest) -> AuthLoginResult:
     username = request.username.strip()
     email = request.email.strip().lower()
 
@@ -41,10 +44,10 @@ def register_user(session: Session, request: RegisterRequest) -> AuthTokenRespon
     session.add(user)
     session.commit()
     session.refresh(user)
-    return create_auth_session(session, user)
+    return create_auth_login_result(user)
 
 
-def login_user(session: Session, request: LoginRequest) -> AuthTokenResponse:
+def login_user(session: Session, request: LoginRequest) -> AuthLoginResult:
     identifier = request.identifier.strip()
     normalized_email = identifier.lower()
     user = session.scalar(
@@ -54,51 +57,43 @@ def login_user(session: Session, request: LoginRequest) -> AuthTokenResponse:
     if user is None or not verify_password(request.password, user.password_hash):
         raise InvalidCredentialsError("账号或密码错误")
 
-    return create_auth_session(session, user)
+    return create_auth_login_result(user)
 
 
-def create_auth_session(session: Session, user: User) -> AuthTokenResponse:
-    token = create_session_token()
-    expires_at = utc_now() + SESSION_TTL
-    auth_session = AuthSession(
-        user_id=user.id,
-        token_hash=hash_session_token(token),
-        expires_at=expires_at,
+def create_auth_login_result(user: User) -> AuthLoginResult:
+    settings = load_auth_settings()
+    expires_at = utc_now() + settings.token_ttl
+    token = create_jwt_token(
+        {"sub": str(user.id), "username": user.username},
+        settings.jwt_secret,
+        expires_at,
     )
-    session.add(auth_session)
-    session.commit()
-    return AuthTokenResponse(
+    return AuthLoginResult(
         token=token,
-        expires_at=expires_at,
-        user=UserResponse.model_validate(user, from_attributes=True),
+        response=AuthTokenResponse(
+            expires_at=expires_at,
+            user=UserResponse.model_validate(user, from_attributes=True),
+        ),
     )
 
 
 def get_user_by_token(session: Session, token: str) -> User:
-    auth_session = get_session_by_token(session, token)
-    user = session.get(User, auth_session.user_id)
+    settings = load_auth_settings()
+    try:
+        payload = decode_jwt_token(token, settings.jwt_secret)
+    except JWTError as exc:
+        raise InvalidCredentialsError(str(exc)) from exc
+
+    user_id = _read_user_id(payload)
+    user = session.get(User, user_id)
     if user is None:
         raise InvalidCredentialsError("用户不存在")
     return user
 
 
-def get_session_by_token(session: Session, token: str) -> AuthSession:
-    token_hash = hash_session_token(token)
-    auth_session = session.scalar(
-        select(AuthSession)
-        .where(
-            AuthSession.token_hash == token_hash,
-            AuthSession.revoked_at.is_(None),
-            AuthSession.expires_at > utc_now(),
-        )
-        .limit(1)
-    )
-    if auth_session is None:
-        raise InvalidCredentialsError("未登录或登录已过期")
-    return auth_session
-
-
-def revoke_session(session: Session, token: str) -> None:
-    auth_session = get_session_by_token(session, token)
-    auth_session.revoked_at = utc_now()
-    session.commit()
+def _read_user_id(payload: dict) -> int:
+    subject = payload.get("sub")
+    try:
+        return int(subject)
+    except (TypeError, ValueError) as exc:
+        raise InvalidCredentialsError("登录凭证内容无效") from exc

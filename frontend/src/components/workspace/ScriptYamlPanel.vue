@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
-import { BookOpen, Clapperboard, Download, Loader2, MapPin, Save, Sparkles, Users, Wrench } from '@lucide/vue'
+import {
+  BookOpen,
+  Clapperboard,
+  Download,
+  MapPin,
+  Save,
+  Users,
+  Wrench,
+} from '@lucide/vue'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,8 +24,6 @@ const props = defineProps<{
   scriptYaml: string
   projectTitle: string
   scriptVersionName?: string
-  hasStoryElements: boolean
-  isGeneratingYaml: boolean
   isSavingYaml: boolean
   isRepairingYaml: boolean
   errorMessage?: string
@@ -28,7 +34,6 @@ const props = defineProps<{
 const activeYamlTab = defineModel<string>('activeYamlTab', { required: true })
 
 const emit = defineEmits<{
-  generate: []
   save: [yamlContent: string, versionName: string]
   repair: [yamlContent: string, validationError: string]
 }>()
@@ -131,11 +136,6 @@ function safeFileName(value: string): string {
         <Button size="sm" variant="outline" :disabled="!canDownloadYaml" @click="downloadYaml">
           <Download class="size-4" />
           导出
-        </Button>
-        <Button size="sm" :disabled="isGeneratingYaml || !hasStoryElements" @click="emit('generate')">
-          <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
-          <Sparkles v-else class="size-4" />
-          生成
         </Button>
       </div>
     </div>

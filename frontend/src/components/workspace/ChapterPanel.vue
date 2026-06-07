@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   BookOpen,
   Clapperboard,
   FileText,
+  GitBranch,
   Loader2,
   MessageSquareText,
   Sparkles,
@@ -12,6 +13,7 @@ import {
 
 import type { AIRun, ChapterAnalysis, StoryElementsSnapshot } from '@/api/projects'
 import type { Chapter } from '@/api/chapters'
+import AgentFlowDialog from '@/components/workspace/AgentFlowDialog.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -32,6 +34,7 @@ const props = defineProps<{
 }>()
 
 const selectedChapterId = defineModel<string | undefined>('selectedChapterId')
+const isAgentFlowOpen = ref(false)
 
 const emit = defineEmits<{
   openNovelInput: []
@@ -95,17 +98,17 @@ const runningMessage = computed(() => {
 
 const storyElementsLabel = computed(() => {
   if (!props.storyElements) return '元素未抽取'
-  return `角色 ${props.storyElements.characters.length} / 地点 ${props.storyElements.locations.length} / 事件 ${props.storyElements.events.length}`
+  return `角色 ${props.storyElements.characters.length} / 地点 ${props.storyElements.locations.length} / 事件 ${props.storyElements.events.length} / 场景 ${props.storyElements.scenes.length}`
 })
 
 function canAnalyzeChapters(): boolean {
-  return !props.isAiTaskRunning && props.chapters.length >= 3 && pendingChapterAnalysisCount.value > 0
+  return !props.isAiTaskRunning && props.chapters.length > 0 && pendingChapterAnalysisCount.value > 0
 }
 
 function canExtractStoryElements(): boolean {
   return (
     !props.isAiTaskRunning &&
-    props.chapters.length >= 3 &&
+    props.chapters.length > 0 &&
     props.chapterAnalyses.length >= props.chapters.length
   )
 }
@@ -144,7 +147,7 @@ function isChapterAnalyzed(chapter: Chapter): boolean {
           <CardDescription>章节内容来自当前项目的数据库记录。</CardDescription>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-          <Badge :variant="chapters.length >= 3 ? 'default' : 'secondary'">
+          <Badge :variant="chapters.length > 0 ? 'default' : 'secondary'">
             {{ chapterCoverageLabel }}
           </Badge>
           <Button size="sm" variant="outline" @click="emit('openNovelInput')">
@@ -170,6 +173,14 @@ function isChapterAnalyzed(chapter: Chapter): boolean {
             <Loader2 v-if="isGeneratingYaml" class="size-4 animate-spin" />
             <Sparkles v-else class="size-4" />
             生成剧本
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            title="查看 Agent 实时流"
+            @click="isAgentFlowOpen = true"
+          >
+            <GitBranch class="size-4" />
           </Button>
         </div>
 
@@ -306,4 +317,12 @@ function isChapterAnalyzed(chapter: Chapter): boolean {
       </div>
     </CardContent>
   </Card>
+
+  <AgentFlowDialog
+    v-model:open="isAgentFlowOpen"
+    :ai-runs="aiRuns"
+    :chapter-count="chapters.length"
+    :story-elements="storyElements"
+    :script-version-name="scriptVersionName"
+  />
 </template>

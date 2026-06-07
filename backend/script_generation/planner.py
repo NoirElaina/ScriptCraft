@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from llm.base import LLMResponseError, parse_json_content
+from llm.streaming import StreamCallback, invoke_model
 
 
 class ChapterScenePlanState(TypedDict, total=False):
@@ -15,8 +16,10 @@ class ChapterScenePlanState(TypedDict, total=False):
     characters: Sequence[Mapping[str, Any]]
     locations: Sequence[Mapping[str, Any]]
     events: Sequence[Mapping[str, Any]]
+    scene_cards: Sequence[Mapping[str, Any]]
     memory: Mapping[str, Any]
     messages: list[BaseMessage]
+    on_stream: StreamCallback
     raw_payload: dict[str, Any]
     result: dict[str, Any]
 
@@ -33,7 +36,9 @@ class ChapterScenePlanner:
         characters: Sequence[Mapping[str, Any]],
         locations: Sequence[Mapping[str, Any]],
         events: Sequence[Mapping[str, Any]],
+        scene_cards: Sequence[Mapping[str, Any]],
         memory: Mapping[str, Any],
+        on_stream: StreamCallback | None = None,
     ) -> dict[str, Any]:
         state = self.graph.invoke(
             {
@@ -42,7 +47,9 @@ class ChapterScenePlanner:
                 "characters": characters,
                 "locations": locations,
                 "events": events,
+                "scene_cards": scene_cards,
                 "memory": memory,
+                "on_stream": on_stream,
             }
         )
         return state["result"]
@@ -68,6 +75,7 @@ def build_prompt_node(state: ChapterScenePlanState) -> ChapterScenePlanState:
             characters=state["characters"],
             locations=state["locations"],
             events=state["events"],
+            scene_cards=state["scene_cards"],
             memory=state["memory"],
         )
     }
@@ -76,7 +84,13 @@ def build_prompt_node(state: ChapterScenePlanState) -> ChapterScenePlanState:
 def call_model_node(model: BaseChatModel):
     def node(state: ChapterScenePlanState) -> ChapterScenePlanState:
         try:
-            response = model.invoke(state["messages"])
+            response = invoke_model(
+                model,
+                state["messages"],
+                on_stream=state.get("on_stream"),
+                node="scene_planning",
+                title="场景规划模型输出",
+            )
         except Exception as exc:
             raise LLMResponseError(f"AI 服务调用失败：{exc}") from exc
         return {"raw_payload": parse_json_content(response.content)}
@@ -103,6 +117,7 @@ def build_chapter_scene_plan_messages(
     characters: Sequence[Mapping[str, Any]],
     locations: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
+    scene_cards: Sequence[Mapping[str, Any]],
     memory: Mapping[str, Any],
 ) -> list[BaseMessage]:
     chapter_index = _int(chapter.get("index"), 0)
@@ -113,6 +128,7 @@ def build_chapter_scene_plan_messages(
         "characters": characters,
         "locations": locations,
         "current_chapter_events": events,
+        "current_chapter_scene_cards": scene_cards,
         "script_memory": memory,
     }
 
@@ -151,6 +167,7 @@ def build_chapter_scene_plan_messages(
                 "- characters 只能使用输入 characters 中已有 ID。\n"
                 "- source_events 只能使用 current_chapter_events 中已有 ID，可为空。\n"
                 "- 每章至少 1 个场景，不写完整对白，不写 storyboard。\n\n"
+                "- 优先复用 current_chapter_scene_cards 的场景标题、地点、出场角色、戏剧目的和关键节拍。\n\n"
                 "输入数据 JSON：\n"
                 f"{json.dumps(source, ensure_ascii=False)}"
             )

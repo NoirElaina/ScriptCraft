@@ -81,7 +81,7 @@ function tidyNovelText() {
           id="project-source-text"
           v-model="novelText"
           class="min-h-0 flex-1 resize-none overflow-y-auto leading-7"
-          placeholder="第1章 ...&#10;&#10;第2章 ...&#10;&#10;第3章 ..."
+          placeholder="粘贴小说正文，支持单章或多章文本。"
           @paste="handlePaste"
         />
       </div>

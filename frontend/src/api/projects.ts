@@ -109,12 +109,26 @@ export interface StoryEvent {
   involved_characters: string[]
 }
 
+export interface StorySceneCard {
+  id: string
+  title: string
+  source_chapter: string
+  location_id: string
+  characters: string[]
+  source_events: string[]
+  summary: string
+  dramatic_purpose: string
+  key_beats: string[]
+  time_of_day: string
+}
+
 export interface StoryElementsSnapshot {
   id: number
   project_id: number
   characters: StoryCharacter[]
   locations: StoryLocation[]
   events: StoryEvent[]
+  scenes: StorySceneCard[]
   created_at: string
 }
 

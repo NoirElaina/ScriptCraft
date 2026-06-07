@@ -1,4 +1,4 @@
-import { clearAuthToken, requestJson, setAuthToken } from './client'
+import { requestJson } from './client'
 
 export interface AuthUser {
   id: number
@@ -8,7 +8,6 @@ export interface AuthUser {
 }
 
 export interface AuthTokenResponse {
-  token: string
   expires_at: string
   user: AuthUser
 }
@@ -25,21 +24,17 @@ export interface LoginPayload {
 }
 
 export async function register(payload: RegisterPayload): Promise<AuthTokenResponse> {
-  const result = await requestJson<AuthTokenResponse>('/api/auth/register', {
+  return requestJson<AuthTokenResponse>('/api/auth/register', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
-  setAuthToken(result.token)
-  return result
 }
 
 export async function login(payload: LoginPayload): Promise<AuthTokenResponse> {
-  const result = await requestJson<AuthTokenResponse>('/api/auth/login', {
+  return requestJson<AuthTokenResponse>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
-  setAuthToken(result.token)
-  return result
 }
 
 export async function getCurrentUser(): Promise<AuthUser> {
@@ -47,9 +42,5 @@ export async function getCurrentUser(): Promise<AuthUser> {
 }
 
 export async function logout(): Promise<void> {
-  try {
-    await requestJson<void>('/api/auth/logout', { method: 'POST' })
-  } finally {
-    clearAuthToken()
-  }
+  await requestJson<void>('/api/auth/logout', { method: 'POST' })
 }
