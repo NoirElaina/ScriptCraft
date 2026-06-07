@@ -330,6 +330,27 @@ async function handleSaveProject() {
   }
 }
 
+async function handleRenameProject(title: string) {
+  const project = currentProject.value
+  if (!project) return
+
+  workspaceErrorMessage.value = ''
+  isSavingProject.value = true
+
+  try {
+    const updatedProject = await updateProject(project.id, { title })
+    if (workspace.value && workspace.value.project.id === project.id) {
+      workspace.value = { ...workspace.value, project: updatedProject }
+    }
+    projectTitle.value = updatedProject.title
+    await loadProjectList()
+  } catch (error) {
+    workspaceErrorMessage.value = error instanceof Error ? error.message : '项目改名失败'
+  } finally {
+    isSavingProject.value = false
+  }
+}
+
 async function handleDeleteProject(project: ProjectListItem) {
   if (!window.confirm(`删除项目「${project.title}」？`)) return
 
@@ -640,6 +661,7 @@ function forgetActiveProject(projectId?: number) {
         <div v-else class="grid h-full min-h-0 gap-4 xl:grid-cols-[500px_minmax(0,1fr)_400px]">
           <ChapterPanel
             v-model:selected-chapter-id="selectedChapterId"
+            :project-title="currentProject.title"
             :chapters="chapters"
             :chapter-analyses="chapterAnalyses"
             :chapter-coverage-label="chapterCoverageLabel"
@@ -650,7 +672,9 @@ function forgetActiveProject(projectId?: number) {
             :is-extracting="isStoryElementsBusy"
             :is-generating-yaml="isScriptYamlBusy"
             :is-ai-task-running="isAiTaskRunning"
+            :is-renaming-project="isSavingProject"
             @open-novel-input="openNovelInputDialog"
+            @rename-project="handleRenameProject"
             @analyze-chapters="handleAnalyzeProjectChapters"
             @extract-story-elements="handleExtractStoryElements"
             @generate-script-yaml="handleGenerateScriptYaml"
